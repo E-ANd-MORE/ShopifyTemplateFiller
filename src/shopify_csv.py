@@ -30,13 +30,25 @@ class ShopifyCSVGenerator:
     # Shopify CSV column order (must match template exactly)
     SHOPIFY_COLUMNS = [
         'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category',
-        'Type', 'Tags', 'Published', 'Option1 Name', 'Option1 Value', 'Option1 Linked To',
-        'Option2 Name', 'Option2 Value', 'Option2 Linked To', 'Option3 Name', 'Option3 Value', 'Option3 Linked To',
-        'Variant Price', 'Variant Compare At Price', 'Variant Requires Shipping',
-        'Variant Taxable', 'Image Src', 'Image Position', 'Image Alt Text',
-        'SKU', 'Variant Barcode', 'Variant Fulfillment Service',
-        'Variant Inventory Tracker', 'Variant Inventory Qty',
-        'Variant Inventory Policy', 'Status'
+        'Type', 'Tags', 'Published', 
+        'Option1 Name', 'Option1 Value', 'Option1 Linked To',
+        'Option2 Name', 'Option2 Value', 'Option2 Linked To', 
+        'Option3 Name', 'Option3 Value', 'Option3 Linked To',
+        'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Policy',
+        'Variant Fulfillment Service', 'Variant Price', 'Variant Compare At Price',
+        'Variant Requires Shipping', 'Variant Taxable',
+        'Unit Price Total Measure', 'Unit Price Total Measure Unit',
+        'Unit Price Base Measure', 'Unit Price Base Measure Unit',
+        'Variant Barcode', 'Image Src', 'Image Position', 'Image Alt Text',
+        'Gift Card', 'SEO Title', 'SEO Description',
+        'Google Shopping / Google Product Category', 'Google Shopping / Gender',
+        'Google Shopping / Age Group', 'Google Shopping / MPN',
+        'Google Shopping / Condition', 'Google Shopping / Custom Product',
+        'Google Shopping / Custom Label 0', 'Google Shopping / Custom Label 1',
+        'Google Shopping / Custom Label 2', 'Google Shopping / Custom Label 3',
+        'Google Shopping / Custom Label 4',
+        'Variant Image', 'Variant Weight Unit', 'Variant Tax Code',
+        'Cost per item', 'Status'
     ]
     
     def __init__(self):
@@ -198,6 +210,8 @@ class ShopifyCSVGenerator:
         - First variant gets full product info (title, description)
         - Subsequent variants only have handle + variant info
         - Each variant can have multiple image rows
+        
+        CRITICAL: All variants MUST have the same Option Names (Rule 1 from fixer.instructions.md)
         """
         rows = []
         
@@ -216,13 +230,18 @@ class ShopifyCSVGenerator:
             'Status': 'active',
         }
         
+        # CRITICAL FIX: Extract Option Names from variant with MOST options
+        # All variants MUST use the same Option Names (Shopify Rule 1)
+        # We need to find the variant with the most complete option set
+        standard_option_names = self._extract_standard_option_names_from_all(group.variants)
+        
         # Track image position across all variants
         image_position = 1
         
         # Process each variant
         for variant_idx, variant in enumerate(group.variants):
-            # Extract variant options from product name
-            variant_options = self._extract_variant_options(variant)
+            # Extract variant VALUES using the STANDARD option names
+            variant_options = self._extract_variant_options(variant, standard_option_names)
             
             # Get images for THIS specific variant (from input CSV)
             variant_images = variant.raw_images if hasattr(variant, 'raw_images') and variant.raw_images else []
@@ -236,14 +255,15 @@ class ShopifyCSVGenerator:
                 row_data['Title'] = group.base_name
                 row_data['Body (HTML)'] = group.description or ''
             else:
-                # Subsequent rows: only handle and variant info
+                # Subsequent rows: Keep Product Category consistent across all variants
+                # Per Shopify Rule 2: All variants must have same Product Category
                 row_data = {
                     'Handle': handle,
                     'Title': '',  # Empty for subsequent variants
                     'Body (HTML)': '',
-                    'Vendor': '',
-                    'Product Category': '',
-                    'Type': '',
+                    'Vendor': group.brand,  # Keep vendor for all variants
+                    'Product Category': group.category or 'Other',  # CRITICAL: Same category for all variants
+                    'Type': group.category or '',  # Keep type consistent
                     'Tags': '',
                     'Published': '',
                     'Status': '',
@@ -276,19 +296,132 @@ class ShopifyCSVGenerator:
         
         return rows
     
-    def _extract_variant_options(self, variant: ProductData) -> Dict[str, str]:
+    def _extract_standard_option_names_from_all(self, variants: List[ProductData]) -> Dict[str, str]:
         """
-        Extract variant options from product's variant data.
+        Extract and NORMALIZE Option Names from ALL variants.
         
-        Returns dict with option names and values.
+        This ensures Rule 1 compliance: All variants MUST have identical Option Names.
+        
+        We collect all option names used across variants, normalize them (e.g., "Flavor/Scent" → "Flavor"),
+        and only include options that appear in a meaningful number of variants.
+        
+        Args:
+            variants: All variants in the product group
+            
+        Returns:
+            Dict with standardized option names: {'Option1 Name': 'Color', 'Option2 Name': 'Size', ...}
         """
-        options = {}
+        # Count how many variants have each normalized option type
+        option_counts = {}
         
-        if variant.variants:
-            # Use Claude-extracted variants (up to 3 options)
-            for idx, var in enumerate(variant.variants[:3], 1):
-                options[f'Option{idx} Name'] = var.get('name', '')
-                options[f'Option{idx} Value'] = var.get('value', '')
+        for variant in variants:
+            seen_in_variant = set()  # Track which options this variant has
+            if hasattr(variant, 'variants') and variant.variants:
+                for var in variant.variants:
+                    option_name = var.get('name', '').strip()
+                    if option_name:
+                        # Normalize the option name to a standard type
+                        normalized = self._normalize_option_name(option_name)
+                        seen_in_variant.add(normalized)
+            
+            # Count each unique option in this variant
+            for opt in seen_in_variant:
+                option_counts[opt] = option_counts.get(opt, 0) + 1
+        
+        # Only include options that appear in at least 30% of variants
+        # OR if there are only 1-2 variants, include all options
+        threshold = max(1, len(variants) * 0.3)
+        
+        standard_option_types = [
+            opt for opt, count in sorted(option_counts.items())
+            if count >= threshold
+        ][:3]  # Max 3 options
+        
+        # Create standard names dict
+        standard_names = {
+            'Option1 Name': '',
+            'Option2 Name': '',
+            'Option3 Name': ''
+        }
+        
+        for idx, option_type in enumerate(standard_option_types, 1):
+            standard_names[f'Option{idx} Name'] = option_type
+        
+        return standard_names
+    
+    def _normalize_option_name(self, name: str) -> str:
+        """
+        Normalize option names to standard forms.
+        
+        Examples:
+        - "Flavor/Scent" → "Flavor"
+        - "Size/Volume" → "Size"
+        - "Color/Shade" → "Color"
+        """
+        name_lower = name.lower()
+        
+        # Map variations to standard names
+        if 'flavor' in name_lower or 'scent' in name_lower or 'fragrance' in name_lower:
+            return 'Flavor'
+        elif 'size' in name_lower or 'volume' in name_lower or 'weight' in name_lower:
+            return 'Size'
+        elif 'color' in name_lower or 'colour' in name_lower or 'shade' in name_lower:
+            return 'Color'
+        elif 'type' in name_lower or 'formula' in name_lower or 'finish' in name_lower:
+            return 'Type'
+        elif 'material' in name_lower or 'fabric' in name_lower:
+            return 'Material'
+        elif 'style' in name_lower or 'design' in name_lower:
+            return 'Style'
+        else:
+            # Return the first word, capitalized
+            first_word = name.split('/')[0].split()[0].strip()
+            return first_word.capitalize()
+    
+    def _extract_variant_options(
+        self, 
+        variant: ProductData, 
+        standard_option_names: Dict[str, str]
+    ) -> Dict[str, str]:
+        """
+        Extract variant options using STANDARD option names.
+        
+        CRITICAL: This ensures all variants use the same Option Names (Shopify Rule 1).
+        Only the Option VALUES differ between variants.
+        
+        We normalize the variant's option names and match them to standard names.
+        IMPORTANT: If an Option Name is empty, the Value MUST also be empty.
+        
+        Args:
+            variant: Current variant to extract values from
+            standard_option_names: Standardized option names (normalized)
+            
+        Returns:
+            Dict with option names and values matching standard names
+        """
+        options = standard_option_names.copy()  # Start with standard names
+        
+        # Initialize all values to empty
+        options['Option1 Value'] = ''
+        options['Option2 Value'] = ''
+        options['Option3 Value'] = ''
+        
+        if hasattr(variant, 'variants') and variant.variants:
+            # Build a map of normalized names to values from this variant
+            variant_map = {}
+            for var in variant.variants:
+                raw_name = var.get('name', '').strip()
+                value = var.get('value', '').strip()
+                if raw_name and value:
+                    normalized_name = self._normalize_option_name(raw_name)
+                    variant_map[normalized_name] = value
+            
+            # Match each standard option to a value from variant
+            for opt_num in range(1, 4):
+                std_name = standard_option_names.get(f'Option{opt_num} Name', '').strip()
+                if std_name and std_name in variant_map:
+                    options[f'Option{opt_num} Value'] = variant_map[std_name]
+                # If std_name not in variant_map, value stays empty
         
         return options
     
@@ -310,31 +443,61 @@ class ShopifyCSVGenerator:
             row[f'Option{i} Value'] = variant_options.get(f'Option{i} Value', '')
             row[f'Option{i} Linked To'] = ''  # Always empty for standard Shopify imports
         
+        # SKU and inventory (only on first row per variant)
+        if is_first:
+            row['Variant SKU'] = variant.upc_code
+            row['Variant Grams'] = ''
+            row['Variant Inventory Tracker'] = 'shopify'
+            row['Variant Inventory Policy'] = 'continue'
+            row['Variant Fulfillment Service'] = 'manual'
+            row['Variant Barcode'] = variant.upc_code
+        else:
+            row['Variant SKU'] = ''
+            row['Variant Grams'] = ''
+            row['Variant Inventory Tracker'] = ''
+            row['Variant Inventory Policy'] = ''
+            row['Variant Fulfillment Service'] = ''
+            row['Variant Barcode'] = ''
+        
         # Pricing
         row['Variant Price'] = float(variant.price)
         row['Variant Compare At Price'] = ''
         row['Variant Requires Shipping'] = 'TRUE'
         row['Variant Taxable'] = 'TRUE'
         
+        # Unit pricing (empty for now)
+        row['Unit Price Total Measure'] = ''
+        row['Unit Price Total Measure Unit'] = ''
+        row['Unit Price Base Measure'] = ''
+        row['Unit Price Base Measure Unit'] = ''
+        
         # Image
         row['Image Src'] = image_url if image_url else ''
         row['Image Position'] = image_position if image_position else ''
         row['Image Alt Text'] = f"{variant.brand} {variant.name}" if image_url else ''
         
-        # SKU and inventory (only on first row per variant)
-        if is_first:
-            row['SKU'] = variant.upc_code
-            row['Variant Barcode'] = variant.upc_code
-            row['Variant Fulfillment Service'] = 'manual'
-            row['Variant Inventory Tracker'] = 'shopify'
-            row['Variant Inventory Qty'] = variant.quantity
-            row['Variant Inventory Policy'] = 'continue'
-        else:
-            row['SKU'] = ''
-            row['Variant Barcode'] = ''
-            row['Variant Fulfillment Service'] = ''
-            row['Variant Inventory Tracker'] = ''
-            row['Variant Inventory Qty'] = ''
-            row['Variant Inventory Policy'] = ''
+        # Additional required fields
+        row['Gift Card'] = 'FALSE'
+        row['SEO Title'] = ''
+        row['SEO Description'] = ''
+        
+        # Google Shopping fields (empty)
+        row['Google Shopping / Google Product Category'] = ''
+        row['Google Shopping / Gender'] = ''
+        row['Google Shopping / Age Group'] = ''
+        row['Google Shopping / MPN'] = ''
+        row['Google Shopping / Condition'] = ''
+        row['Google Shopping / Custom Product'] = ''
+        row['Google Shopping / Custom Label 0'] = ''
+        row['Google Shopping / Custom Label 1'] = ''
+        row['Google Shopping / Custom Label 2'] = ''
+        row['Google Shopping / Custom Label 3'] = ''
+        row['Google Shopping / Custom Label 4'] = ''
+        
+        # Variant specific fields
+        row['Variant Image'] = ''
+        row['Variant Weight Unit'] = ''
+        row['Variant Tax Code'] = ''
+        row['Cost per item'] = ''
         
         return row

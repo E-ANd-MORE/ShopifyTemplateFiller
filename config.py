@@ -62,6 +62,7 @@ PROCESSING_CONFIG = {
     "max_workers": int(os.getenv("MAX_WORKERS", 5)),
     "enable_checkpoints": True,
     "checkpoint_interval": 1,  # Save after each batch
+    "records_per_file": int(os.getenv("RECORDS_PER_FILE", 1000)),  # Maximum records per output CSV
 }
 
 # Domain Priority for URL Search (Brand website FIRST, then retailers)
@@ -80,14 +81,20 @@ DOMAIN_PRIORITY = [
 ]
 
 # Shopify Product Categories
+# Shopify Standard Product Taxonomy Categories
+# Format: Hierarchical with ">" separator (minimum 2 levels recommended)
+# Source: https://shopify.github.io/product-taxonomy/releases/unstable/
+# Top level: "Health & Beauty" (as per official taxonomy)
 SHOPIFY_CATEGORIES = [
-    "Hair Care",
-    "Skincare",
-    "Makeup",
-    "Bath & Body",
-    "Fragrance",
-    "Tools & Accessories",
-    "Other"
+    "Health & Beauty > Hair Care",
+    "Health & Beauty > Skin Care",
+    "Health & Beauty > Makeup",
+    "Health & Beauty > Bath & Body",
+    "Health & Beauty > Oral Care",
+    "Health & Beauty > Fragrance",
+    "Health & Beauty > Nail Care",
+    "Health & Beauty > Personal Care",
+    "Home & Garden > Home Decor",
 ]
 
 # Logging Configuration

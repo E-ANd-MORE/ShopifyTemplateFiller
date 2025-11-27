@@ -92,6 +92,13 @@ Required environment variables (in .env):
     )
     
     parser.add_argument(
+        '--records-per-file',
+        type=int,
+        default=None,
+        help='Maximum records per output CSV file (default: 1000)'
+    )
+    
+    parser.add_argument(
         '--no-checkpoints',
         action='store_true',
         help='Disable checkpoint saving'
@@ -182,6 +189,10 @@ def main():
     if args.max_workers:
         from config import PROCESSING_CONFIG
         PROCESSING_CONFIG['max_workers'] = args.max_workers
+    
+    if args.records_per_file:
+        from config import PROCESSING_CONFIG
+        PROCESSING_CONFIG['records_per_file'] = args.records_per_file
     
     if args.no_checkpoints:
         from config import PROCESSING_CONFIG

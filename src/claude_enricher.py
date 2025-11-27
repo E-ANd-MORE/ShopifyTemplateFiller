@@ -189,15 +189,14 @@ Return ONLY the description text, nothing else."""
     
     def assign_category(self, brand: str, product_name: str) -> str:
         """
-        Assign product to one of the predefined Shopify categories.
+        Assign product to Shopify Standard Product Taxonomy category.
         
         Args:
             brand: Brand name
             product_name: Product name
             
         Returns:
-            One of: Hair Care, Skincare, Makeup, Bath & Body, 
-                   Fragrance, Tools & Accessories, Other
+            Valid Shopify category in hierarchical format (e.g., "Beauty & Personal Care > Face Care")
         """
         cache_key = f"category|{product_name}"
         if cache_key in self.cache:
@@ -205,16 +204,18 @@ Return ONLY the description text, nothing else."""
         
         categories_list = "\n".join([f"{i+1}. {cat}" for i, cat in enumerate(SHOPIFY_CATEGORIES)])
         
-        prompt = f"""Assign this product to ONE category from the list.
+        prompt = f"""Assign this product to ONE category from Shopify's Standard Product Taxonomy.
 
 Brand: {brand}
 Product: {product_name}
 
-Available categories:
+Available categories (use EXACT format):
 {categories_list}
 
-Return ONLY the category name (e.g., "Hair Care" or "Skincare").
-Choose the most appropriate category. If unsure, use "Other"."""
+CRITICAL: Return ONLY the EXACT category string including the ">" separator.
+Example: "Beauty & Personal Care > Face Care"
+
+Choose the most appropriate category based on the product type."""
 
         try:
             message = self.client.messages.create(
@@ -229,7 +230,18 @@ Choose the most appropriate category. If unsure, use "Other"."""
             
             response = message.content[0].text.strip()
             
-            # Extract category name
+            # Clean up response (remove quotes, extra whitespace)
+            response = response.replace('"', '').replace("'", "").strip()
+            
+            # Try exact match first
+            for cat in SHOPIFY_CATEGORIES:
+                if cat.lower() == response.lower():
+                    self.cache[cache_key] = cat
+                    self._save_cache()
+                    logger.debug(f"Assigned category '{cat}' to: {product_name}")
+                    return cat
+            
+            # Try partial match (look for category in response)
             for cat in SHOPIFY_CATEGORIES:
                 if cat.lower() in response.lower():
                     self.cache[cache_key] = cat
@@ -237,13 +249,63 @@ Choose the most appropriate category. If unsure, use "Other"."""
                     logger.debug(f"Assigned category '{cat}' to: {product_name}")
                     return cat
             
-            # Fallback
-            logger.debug(f"Category fallback to 'Other' for: {product_name}")
-            return "Other"
+            # Fallback: use keyword-based category assignment
+            fallback_cat = self._guess_category_from_keywords(product_name)
+            logger.debug(f"Category fallback to '{fallback_cat}' for: {product_name}")
+            return fallback_cat
             
         except Exception as e:
             logger.error(f"Category assignment failed: {str(e)}")
-            return "Other"
+            return self._guess_category_from_keywords(product_name)
+    
+    def _guess_category_from_keywords(self, product_name: str) -> str:
+        """
+        Guess category based on product name keywords.
+        Fallback method when Claude fails or returns invalid category.
+        """
+        name_lower = product_name.lower()
+        
+        # Keyword mappings to Shopify Standard Taxonomy
+        # Using "Health & Beauty" as top-level (official Shopify taxonomy)
+        keyword_map = {
+            "Health & Beauty > Hair Care": [
+                "shampoo", "conditioner", "hair", "scalp", "haircare"
+            ],
+            "Health & Beauty > Skin Care": [
+                "face", "facial", "toner", "cleanser", "moisturizer", 
+                "serum", "cream", "mask", "makeup remover", "skin"
+            ],
+            "Health & Beauty > Oral Care": [
+                "mouthwash", "mouth wash", "toothpaste", "dental", 
+                "oral", "teeth", "breath"
+            ],
+            "Health & Beauty > Bath & Body": [
+                "body", "bath", "shower", "soap", "lotion", 
+                "feminine", "intimate", "wipes", "body wash"
+            ],
+            "Health & Beauty > Makeup": [
+                "lipstick", "foundation", "mascara", "eyeshadow",
+                "makeup", "cosmetic", "powder", "blush"
+            ],
+            "Health & Beauty > Fragrance": [
+                "perfume", "cologne", "fragrance", "eau de", "scent"
+            ],
+            "Health & Beauty > Nail Care": [
+                "nail", "polish", "manicure", "pedicure"
+            ],
+            "Health & Beauty > Personal Care": [
+                "vitamin", "supplement", "medicine", "health", "wellness"
+            ],
+        }
+        
+        # Check keywords
+        for category, keywords in keyword_map.items():
+            for keyword in keywords:
+                if keyword in name_lower:
+                    return category
+        
+        # Default fallback - use most common category
+        return "Health & Beauty > Skin Care"
     
     def clean_product_name(self, raw_name: str, brand: str) -> str:
         """

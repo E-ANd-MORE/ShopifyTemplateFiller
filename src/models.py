@@ -120,6 +120,7 @@ class ProcessingStats:
     
     # Output stats
     csv_rows_generated: int = 0
+    output_files_generated: int = 0
     
     # Errors
     errors: List[str] = field(default_factory=list)
@@ -148,6 +149,7 @@ class ProcessingStats:
         print(f"  Failed enrichment:       {self.failed_enrichment}")
         print(f"  Total images extracted:  {self.total_images}")
         print(f"  Shopify CSV rows:        {self.csv_rows_generated}")
+        print(f"  Output files generated:  {self.output_files_generated}")
         print(f"  Processing time:         {self.processing_time_sec:.1f}s")
         
         if self.errors:

@@ -110,6 +110,8 @@ class ProductEnrichmentPipeline:
             logger.info(f"\n--- STEP 3: PROCESSING {len(product_groups)} PRODUCT GROUPS ---")
             logger.info(f"Batch size: {self.batch_size}")
             
+            all_output_files = []
+            
             for batch_idx in range(0, len(product_groups), self.batch_size):
                 batch = product_groups[batch_idx:batch_idx + self.batch_size]
                 batch_num = (batch_idx // self.batch_size) + 1
@@ -126,39 +128,34 @@ class ProductEnrichmentPipeline:
                     # Save checkpoint
                     if self.enable_checkpoints:
                         self.checkpoint_mgr.save_checkpoint(batch, batch_num, stats.to_dict())
+                    
+                    # Generate output CSV for this batch immediately
+                    logger.info(f"\n→ Generating CSV for batch {batch_num}...")
+                    batch_output_files = self._generate_batch_output(
+                        batch, output_file, batch_num, total_batches, stats
+                    )
+                    
+                    if batch_output_files:
+                        all_output_files.extend(batch_output_files)
+                        logger.info(f"✓ Generated {len(batch_output_files)} file(s) for batch {batch_num}")
+                    else:
+                        logger.warning(f"No output files generated for batch {batch_num}")
                         
                 except Exception as e:
                     logger.error(f"Batch {batch_num} failed: {str(e)}")
                     stats.add_error(f"Batch {batch_num}: {str(e)}")
                     continue
             
-            # Step 4: Generate Shopify CSV
-            logger.info("\n--- STEP 4: GENERATING SHOPIFY CSV ---")
-            csv_content = self.csv_gen.generate_shopify_csv(product_groups)
+            # Step 4: Summary
+            logger.info("\n--- STEP 4: OUTPUT FILES SUMMARY ---")
             
-            if not csv_content:
-                logger.error("Failed to generate CSV")
+            if not all_output_files:
+                logger.error("No output files generated")
                 return False, stats
             
-            csv_rows = len(csv_content.split('\n')) - 2
-            stats.csv_rows_generated = csv_rows
-            
-            # Step 5: Validate output
-            logger.info("\n--- STEP 5: VALIDATING OUTPUT ---")
-            if not self._validate_output(csv_content):
-                logger.error("Output validation failed")
-                stats.add_error("Output validation failed")
-                return False, stats
-            
-            # Step 6: Write to file
-            logger.info("\n--- STEP 6: WRITING OUTPUT FILE ---")
-            output_path = Path(output_file)
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
-                f.write(csv_content)
-            
-            logger.info(f"✓ Saved to: {output_path}")
+            logger.info(f"\n✓ Generated {len(all_output_files)} total output file(s)")
+            for i, file_path in enumerate(all_output_files, 1):
+                logger.info(f"  {i}. {file_path}")
             
             # Final statistics
             stats.end_time = datetime.now().isoformat()
@@ -244,6 +241,197 @@ class ProductEnrichmentPipeline:
             except Exception as e:
                 logger.error(f"  ✗ {group.base_name}: {str(e)}")
                 stats.failed_enrichment += 1
+    
+    def _generate_batch_output(
+        self,
+        batch: List[ProductGroup],
+        base_output_file: str,
+        batch_num: int,
+        total_batches: int,
+        stats: ProcessingStats
+    ) -> List[str]:
+        """
+        Generate CSV output files for a single batch.
+        
+        Args:
+            batch: Product groups in this batch
+            base_output_file: Base output file path
+            batch_num: Current batch number
+            total_batches: Total number of batches
+            stats: Statistics object
+            
+        Returns:
+            List of generated file paths
+        """
+        try:
+            output_path = Path(base_output_file)
+            output_dir = output_path.parent
+            output_base = output_path.stem
+            output_ext = output_path.suffix
+            
+            output_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Generate filename with batch number
+            if total_batches == 1:
+                batch_output_file = output_path
+            else:
+                batch_output_file = output_dir / f"{output_base}_batch{batch_num:03d}{output_ext}"
+            
+            # Generate CSV for this batch
+            csv_content = self.csv_gen.generate_shopify_csv(batch)
+            
+            if not csv_content:
+                logger.error(f"Failed to generate CSV for batch {batch_num}")
+                return []
+            
+            # Parse and count rows
+            import csv
+            from io import StringIO
+            reader = csv.DictReader(StringIO(csv_content))
+            rows = list(reader)
+            row_count = len(rows)
+            
+            # Now split this batch's output into files based on records_per_file
+            from config import PROCESSING_CONFIG
+            records_per_file = PROCESSING_CONFIG.get('records_per_file', 1000)
+            
+            # If batch rows fit in one file or no splitting needed
+            if row_count <= records_per_file:
+                # Write single file
+                with open(batch_output_file, 'w', encoding='utf-8', newline='') as f:
+                    f.write(csv_content)
+                
+                logger.debug(f"  Wrote {row_count} rows to {batch_output_file.name}")
+                stats.csv_rows_generated += row_count
+                stats.output_files_generated += 1
+                
+                return [str(batch_output_file)]
+            
+            else:
+                # Split into multiple files
+                output_files = []
+                header = reader.fieldnames
+                num_files = (row_count + records_per_file - 1) // records_per_file
+                
+                for file_idx in range(num_files):
+                    start_idx = file_idx * records_per_file
+                    end_idx = min(start_idx + records_per_file, row_count)
+                    file_rows = rows[start_idx:end_idx]
+                    
+                    # Generate filename
+                    if num_files == 1:
+                        file_path = batch_output_file
+                    else:
+                        file_path = output_dir / f"{output_base}_batch{batch_num:03d}_part{file_idx + 1:03d}{output_ext}"
+                    
+                    # Write file
+                    with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                        writer = csv.DictWriter(f, fieldnames=header)
+                        writer.writeheader()
+                        writer.writerows(file_rows)
+                    
+                    logger.debug(f"  Wrote {len(file_rows)} rows to {file_path.name}")
+                    output_files.append(str(file_path))
+                
+                stats.csv_rows_generated += row_count
+                stats.output_files_generated += len(output_files)
+                
+                return output_files
+                
+        except Exception as e:
+            logger.error(f"Failed to generate output for batch {batch_num}: {str(e)}")
+            return []
+    
+    def _generate_batched_csv_files(
+        self, 
+        product_groups: List[ProductGroup], 
+        output_file: str,
+        stats: ProcessingStats
+    ) -> List[str]:
+        """
+        Generate multiple CSV files with configurable max records each.
+        
+        Args:
+            product_groups: All product groups to export
+            output_file: Base output file path
+            stats: Statistics object to update
+            
+        Returns:
+            List of generated file paths
+        """
+        from config import PROCESSING_CONFIG
+        records_per_file = PROCESSING_CONFIG.get('records_per_file', 1000)
+        output_path = Path(output_file)
+        output_dir = output_path.parent
+        output_base = output_path.stem
+        output_ext = output_path.suffix
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Generate complete CSV content first
+        logger.info("Generating complete CSV content...")
+        csv_content = self.csv_gen.generate_shopify_csv(product_groups)
+        
+        if not csv_content:
+            logger.error("Failed to generate CSV content")
+            return []
+        
+        # Parse CSV content
+        import csv
+        from io import StringIO
+        reader = csv.DictReader(StringIO(csv_content))
+        header = reader.fieldnames
+        all_rows = list(reader)
+        
+        total_rows = len(all_rows)
+        logger.info(f"Total records: {total_rows}")
+        
+        if total_rows == 0:
+            logger.error("No data rows generated")
+            return []
+        
+        # Calculate number of files needed
+        num_files = (total_rows + records_per_file - 1) // records_per_file
+        logger.info(f"Splitting into {num_files} file(s) ({records_per_file} records each)")
+        
+        output_files = []
+        
+        # Split into batches and write files
+        for file_idx in range(num_files):
+            start_idx = file_idx * records_per_file
+            end_idx = min(start_idx + records_per_file, total_rows)
+            batch_rows = all_rows[start_idx:end_idx]
+            
+            # Generate filename
+            if num_files == 1:
+                file_path = output_path
+            else:
+                file_path = output_dir / f"{output_base}_part{file_idx + 1:03d}{output_ext}"
+            
+            # Write batch to file
+            with open(file_path, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.DictWriter(f, fieldnames=header)
+                writer.writeheader()
+                writer.writerows(batch_rows)
+            
+            logger.info(f"  ✓ {file_path.name}: {len(batch_rows)} records (rows {start_idx + 1}-{end_idx})")
+            output_files.append(str(file_path))
+        
+        # Update stats
+        stats.csv_rows_generated = total_rows
+        stats.output_files_generated = len(output_files)
+        
+        # Validate first file
+        logger.info("\n--- VALIDATING OUTPUT ---")
+        with open(output_files[0], 'r', encoding='utf-8') as f:
+            first_file_content = f.read()
+        
+        if not self._validate_output(first_file_content):
+            logger.error("Output validation failed")
+            stats.add_error("Output validation failed")
+            return []
+        
+        return output_files
     
     def _validate_output(self, csv_content: str) -> bool:
         """
