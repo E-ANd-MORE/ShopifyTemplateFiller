@@ -49,7 +49,7 @@ Place your input CSV in `data/input/`. Required columns:
 ### 4. Run Pipeline
 
 ```bash
-python main.py data/input/products.csv
+python main.py data/input/input.csv
 ```
 
 Output will be generated at: `data/output/shopify_products.csv`
