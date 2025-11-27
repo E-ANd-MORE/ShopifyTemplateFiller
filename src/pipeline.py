@@ -192,12 +192,20 @@ class ProductEnrichmentPipeline:
                 if not primary:
                     continue
                 
-                url = self.searcher.search_url(group.brand, group.base_name)
+                # Use original product name for search (before cleaning)
+                # This gives better search results on iHerb
+                original_name = primary.name
+                
+                url = self.searcher.search_url(
+                    group.brand, 
+                    original_name,
+                    upc_code=primary.upc_code
+                )
                 if url:
                     group.url = url
-                    logger.debug(f"  ✓ {group.base_name}")
+                    logger.debug(f"  ✓ {original_name[:50]}")
                 else:
-                    logger.debug(f"  ✗ {group.base_name} (URL not found)")
+                    logger.debug(f"  ✗ {original_name[:50]} (URL not found)")
                     stats.failed_url_search += 1
                     
             except Exception as e:

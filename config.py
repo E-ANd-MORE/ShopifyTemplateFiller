@@ -64,17 +64,19 @@ PROCESSING_CONFIG = {
     "checkpoint_interval": 1,  # Save after each batch
 }
 
-# Domain Priority for URL Search
+# Domain Priority for URL Search (Brand website FIRST, then retailers)
 DOMAIN_PRIORITY = [
     "{brand_domain}.com",
+    "{brand_domain}.sa",
+    "{brand_domain}.ae",
     "{brand_domain}.co",
-    "{brand_domain}.jp",
-    "amazon.com",
-    "sephora.com",
-    "beautylish.com",
-    "ulta.com",
-    "dermstore.com",
-    "lookfantastic.com",
+    "iherb.sa",
+    "sa.iherb.com",
+    "iherb.com",
+    "amazon.sa",
+    "noon.com",
+    "namshi.com",
+    "amazon.ae",
 ]
 
 # Shopify Product Categories

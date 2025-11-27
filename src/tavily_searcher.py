@@ -46,13 +46,14 @@ class TavilySearcher:
         
         logger.info("TavilySearcher initialized")
     
-    def search_url(self, brand: str, product_name: str) -> Optional[str]:
+    def search_url(self, brand: str, product_name: str, upc_code: str = None) -> Optional[str]:
         """
         Search for product URL using Tavily API.
         
         Args:
             brand: Product brand name
             product_name: Product name
+            upc_code: UPC/barcode for more accurate search (optional)
             
         Returns:
             Valid HTTPS URL if found, None otherwise
@@ -64,19 +65,60 @@ class TavilySearcher:
         
         brand = brand.strip()
         product_name = product_name.strip()
+        upc_code = upc_code.strip() if upc_code else None
         
-        # Check cache first
-        cache_key = self._generate_cache_key(brand, product_name)
+        # Check cache first (include UPC in cache key)
+        cache_key = self._generate_cache_key(brand, product_name, upc_code)
         cached_url = self.cache.get(cache_key)
         
         if cached_url:
             logger.debug(f"Cache hit: {brand} - {product_name}")
             return cached_url
         
-        # Construct query - more specific to get product pages
-        query = f"{brand} {product_name} buy product page"
-        logger.info(f"Searching: {query}")
+        # Multi-retailer search strategy (Brand website FIRST, then retailers)
+        search_queries = []
         
+        # Strategy 1: Brand's own website (most likely to have exact product)
+        brand_clean = brand.lower().replace(' ', '').replace('-', '')
+        search_queries.append(f'site:{brand_clean}.com "{product_name}"')
+        search_queries.append(f'site:{brand_clean}.sa "{product_name}"')
+        search_queries.append(f'site:{brand_clean}.ae "{product_name}"')
+        
+        # Strategy 2: iHerb with exact product name
+        search_queries.append(f'site:iherb.sa OR site:iherb.com "{brand}" "{product_name}"')
+        
+        # Strategy 3: Regional retailers (Amazon SA, Noon, etc.) with brand + product
+        search_queries.append(f'"{brand}" "{product_name}" site:amazon.sa OR site:noon.com OR site:namshi.com')
+        
+        # Try each query until we find a valid result
+        url = None
+        for query_idx, query in enumerate(search_queries):
+            logger.info(f"Search attempt {query_idx + 1}/{len(search_queries)}: {query}")
+            url = self._execute_search(query, brand)
+            if url:
+                break
+        
+        if url:
+            self.cache[cache_key] = url
+            self._save_cache()
+            return url
+        
+        logger.debug(f"No results found after {len(search_queries)} search attempts")
+        self.cache[cache_key] = None
+        self._save_cache()
+        return None
+    
+    def _execute_search(self, query: str, brand: str) -> Optional[str]:
+        """
+        Execute a single search query.
+        
+        Args:
+            query: Search query string
+            brand: Brand name for domain filtering
+            
+        Returns:
+            Valid URL if found, None otherwise
+        """
         # Generate domain list
         domains = self._get_priority_domains(brand)
         
@@ -102,11 +144,15 @@ class TavilySearcher:
                     results = data.get('results', [])
                     
                     if results:
-                        # Filter out login/account pages
+                        # Filter out unwanted pages
+                        skip_patterns = [
+                            'login', 'signin', 'account', 'cart', 'checkout', 'register',
+                            '/shop/', '/category/', '/collection/', '/search', '/brands/'
+                        ]
+                        
                         filtered_results = [
                             r for r in results
-                            if not any(skip in r.get('url', '').lower() 
-                                     for skip in ['login', 'signin', 'account', 'cart', 'checkout', 'register'])
+                            if not any(skip in r.get('url', '').lower() for skip in skip_patterns)
                         ]
                         
                         if filtered_results:
@@ -119,8 +165,6 @@ class TavilySearcher:
                         
                         # Validate URL
                         if url and self._validate_url(url):
-                            self.cache[cache_key] = url
-                            self._save_cache()
                             logger.info(f"✓ Found: {url}")
                             
                             # Rate limiting
@@ -128,8 +172,6 @@ class TavilySearcher:
                             return url
                     
                     logger.debug(f"No results for: {query}")
-                    self.cache[cache_key] = None
-                    self._save_cache()
                     return None
                 
                 elif response.status_code == 429:
@@ -195,18 +237,22 @@ class TavilySearcher:
         except Exception:
             return False
     
-    def _generate_cache_key(self, brand: str, product: str) -> str:
+    def _generate_cache_key(self, brand: str, product: str, upc_code: str = None) -> str:
         """
         Generate consistent cache key.
         
         Args:
             brand: Brand name
             product: Product name
+            upc_code: UPC code (optional)
             
         Returns:
-            MD5 hash of brand|product
+            MD5 hash of brand|product|upc
         """
-        key = f"{brand.lower()}|{product.lower()}"
+        if upc_code:
+            key = f"{brand.lower()}|{product.lower()}|{upc_code}"
+        else:
+            key = f"{brand.lower()}|{product.lower()}"
         return hashlib.md5(key.encode()).hexdigest()
     
     def _load_cache(self) -> Dict:
