@@ -27,16 +27,16 @@ class ShopifyCSVGenerator:
     - All required Shopify fields
     """
     
-    # Shopify CSV column order (matching export template)
+    # Shopify CSV column order (must match template exactly)
     SHOPIFY_COLUMNS = [
         'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Product Category',
-        'Type', 'Tags', 'Published', 'Option1 Name', 'Option1 Value',
-        'Option2 Name', 'Option2 Value', 'Option3 Name', 'Option3 Value',
+        'Type', 'Tags', 'Published', 'Option1 Name', 'Option1 Value', 'Option1 Linked To',
+        'Option2 Name', 'Option2 Value', 'Option2 Linked To', 'Option3 Name', 'Option3 Value', 'Option3 Linked To',
         'Variant Price', 'Variant Compare At Price', 'Variant Requires Shipping',
         'Variant Taxable', 'Image Src', 'Image Position', 'Image Alt Text',
         'SKU', 'Variant Barcode', 'Variant Fulfillment Service',
         'Variant Inventory Tracker', 'Variant Inventory Qty',
-        'Variant Inventory Policy', 'Variant Image', 'Status'
+        'Variant Inventory Policy', 'Status'
     ]
     
     def __init__(self):
@@ -191,14 +191,13 @@ class ShopifyCSVGenerator:
     
     def _generate_product_rows(self, group: ProductGroup, handle: str) -> List[Dict]:
         """
-        Generate CSV rows for a product group matching Shopify template.
+        Generate CSV rows for a product group.
         
-        Strategy (matching actual Shopify export):
-        - Row 1: Full product info + first variant + first image
-        - Rows 2-N: Additional variants with images (continuing Image Position)
-        - Rows N+1: Additional image-only rows (no variant data, just images)
-        
-        Each variant gets the product images, shown via Image Src and Variant Image columns.
+        Strategy:
+        - Each variant gets its own images from the input CSV
+        - First variant gets full product info (title, description)
+        - Subsequent variants only have handle + variant info
+        - Each variant can have multiple image rows
         """
         rows = []
         
@@ -217,27 +216,30 @@ class ShopifyCSVGenerator:
             'Status': 'active',
         }
         
-        # Get all images
-        images = group.images if group.images else []
-        
-        # Image position counter (increments across ALL rows)
+        # Track image position across all variants
         image_position = 1
         
-        # Process each variant - each gets one row with one image
+        # Process each variant
         for variant_idx, variant in enumerate(group.variants):
+            # Extract variant options from product name
             variant_options = self._extract_variant_options(variant)
-            is_first = (variant_idx == 0)
             
-            # First variant gets full product info
-            if is_first:
+            # Get images for THIS specific variant (from input CSV)
+            variant_images = variant.raw_images if hasattr(variant, 'raw_images') and variant.raw_images else []
+            
+            # First variant gets the product info
+            is_first_variant = (variant_idx == 0)
+            
+            if is_first_variant:
+                # First row includes product title and description
                 row_data = shared_data.copy()
                 row_data['Title'] = group.base_name
                 row_data['Body (HTML)'] = group.description or ''
             else:
-                # Subsequent variants: empty title/description
+                # Subsequent rows: only handle and variant info
                 row_data = {
                     'Handle': handle,
-                    'Title': '',
+                    'Title': '',  # Empty for subsequent variants
                     'Body (HTML)': '',
                     'Vendor': '',
                     'Product Category': '',
@@ -247,57 +249,30 @@ class ShopifyCSVGenerator:
                     'Status': '',
                 }
             
-            # Assign one image to this variant (cycle through images if more variants than images)
-            if images:
-                image_idx = variant_idx % len(images)
-                image_url = images[image_idx]
-                variant_image = images[0] if images else None  # Variant Image uses first image
+            # If this variant has images, create one row per image
+            if variant_images:
+                for img_idx, image_url in enumerate(variant_images):
+                    row = self._create_variant_row(
+                        row_data,
+                        variant,
+                        variant_options,
+                        image_url,
+                        image_position,
+                        is_first=(img_idx == 0)  # Only first image row of this variant gets full data
+                    )
+                    rows.append(row)
+                    image_position += 1
             else:
-                image_url = None
-                variant_image = None
-            
-            row = self._create_variant_row(
-                row_data,
-                variant,
-                variant_options,
-                image_url,
-                image_position if image_url else None,
-                variant_image,
-                is_first=is_first
-            )
-            rows.append(row)
-            
-            if image_url:
-                image_position += 1
-        
-        # Add additional image-only rows (remaining images not assigned to variants)
-        # This happens when we have more images than variants
-        if len(images) > len(group.variants):
-            for img_idx in range(len(group.variants), len(images)):
-                # Image-only row: no variant data, just handle + image
-                empty_row_data = {
-                    'Handle': handle,
-                    'Title': '',
-                    'Body (HTML)': '',
-                    'Vendor': '',
-                    'Product Category': '',
-                    'Type': '',
-                    'Tags': '',
-                    'Published': '',
-                    'Status': '',
-                }
-                
+                # No images for this variant - create single row
                 row = self._create_variant_row(
-                    empty_row_data,
-                    None,  # No variant
-                    {},
-                    images[img_idx],
-                    image_position,
-                    None,  # No variant image
-                    is_first=False
+                    row_data,
+                    variant,
+                    variant_options,
+                    None,
+                    None,
+                    is_first=True
                 )
                 rows.append(row)
-                image_position += 1
         
         return rows
     
@@ -324,38 +299,16 @@ class ShopifyCSVGenerator:
         variant_options: Dict,
         image_url: str = None,
         image_position: int = None,
-        variant_image: str = None,
         is_first: bool = True
     ) -> Dict:
         """Create a single CSV row for a variant"""
         row = shared_data.copy()
         
-        # Handle case when variant is None (image-only rows)
-        if variant is None:
-            # Image-only row
-            for i in range(1, 4):
-                row[f'Option{i} Name'] = ''
-                row[f'Option{i} Value'] = ''
-            row['Variant Price'] = ''
-            row['Variant Compare At Price'] = ''
-            row['Variant Requires Shipping'] = ''
-            row['Variant Taxable'] = ''
-            row['SKU'] = ''
-            row['Variant Barcode'] = ''
-            row['Variant Fulfillment Service'] = ''
-            row['Variant Inventory Tracker'] = ''
-            row['Variant Inventory Qty'] = ''
-            row['Variant Inventory Policy'] = ''
-            row['Image Src'] = image_url if image_url else ''
-            row['Image Position'] = image_position if image_position else ''
-            row['Image Alt Text'] = ''
-            row['Variant Image'] = ''
-            return row
-        
         # Variant options (from Claude extraction)
         for i in range(1, 4):
             row[f'Option{i} Name'] = variant_options.get(f'Option{i} Name', '')
             row[f'Option{i} Value'] = variant_options.get(f'Option{i} Value', '')
+            row[f'Option{i} Linked To'] = ''  # Always empty for standard Shopify imports
         
         # Pricing
         row['Variant Price'] = float(variant.price)
@@ -368,15 +321,20 @@ class ShopifyCSVGenerator:
         row['Image Position'] = image_position if image_position else ''
         row['Image Alt Text'] = f"{variant.brand} {variant.name}" if image_url else ''
         
-        # Variant Image (specific image for this variant)
-        row['Variant Image'] = variant_image if variant_image else ''
-        
-        # SKU and inventory (always present for variant rows)
-        row['SKU'] = variant.upc_code if is_first else ''
-        row['Variant Barcode'] = variant.upc_code if is_first else ''
-        row['Variant Fulfillment Service'] = 'manual' if is_first else ''
-        row['Variant Inventory Tracker'] = 'shopify' if is_first else ''
-        row['Variant Inventory Qty'] = variant.quantity if is_first else ''
-        row['Variant Inventory Policy'] = 'continue' if is_first else ''
+        # SKU and inventory (only on first row per variant)
+        if is_first:
+            row['SKU'] = variant.upc_code
+            row['Variant Barcode'] = variant.upc_code
+            row['Variant Fulfillment Service'] = 'manual'
+            row['Variant Inventory Tracker'] = 'shopify'
+            row['Variant Inventory Qty'] = variant.quantity
+            row['Variant Inventory Policy'] = 'continue'
+        else:
+            row['SKU'] = ''
+            row['Variant Barcode'] = ''
+            row['Variant Fulfillment Service'] = ''
+            row['Variant Inventory Tracker'] = ''
+            row['Variant Inventory Qty'] = ''
+            row['Variant Inventory Policy'] = ''
         
         return row

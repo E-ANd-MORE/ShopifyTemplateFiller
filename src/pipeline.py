@@ -177,69 +177,30 @@ class ProductEnrichmentPipeline:
     
     def _process_batch(self, batch: List[ProductGroup], stats: ProcessingStats):
         """
-        Process a single batch through all enrichment steps.
+        Process a single batch - SIMPLIFIED VERSION (NO API CALLS FOR URL/IMAGES).
+        Images are already in the input CSV and mapped to variants.
         
         Args:
             batch: List of ProductGroup objects
             stats: Statistics object to update
         """
-        # Phase 1: Search for URLs (sequential with rate limiting)
-        logger.info("\n→ Phase 1: Searching for product URLs...")
-        for group in batch:
-            try:
-                # Use first variant's info for search
-                primary = group.get_primary_variant()
-                if not primary:
-                    continue
-                
-                # Use original product name for search (before cleaning)
-                # This gives better search results on iHerb
-                original_name = primary.name
-                
-                url = self.searcher.search_url(
-                    group.brand, 
-                    original_name,
-                    upc_code=primary.upc_code
-                )
-                if url:
-                    group.url = url
-                    logger.debug(f"  ✓ {original_name[:50]}")
-                else:
-                    logger.debug(f"  ✗ {original_name[:50]} (URL not found)")
-                    stats.failed_url_search += 1
-                    
-            except Exception as e:
-                logger.error(f"  ✗ {group.base_name}: {str(e)}")
-                stats.failed_url_search += 1
+        # SKIP Phase 1 & 2: URLs and images already in input CSV
+        logger.info("\n→ Skipping URL/Image fetching (using images from input CSV)")
         
-        # Phase 2: Extract images (parallel)
-        logger.info("\n→ Phase 2: Extracting product images (parallel)...")
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {
-                executor.submit(
-                    self.extractor.extract_images,
-                    group.url,
-                    group.base_name
-                ): group for group in batch if group.url
-            }
-            
-            for future in as_completed(futures):
-                group = futures[future]
-                try:
-                    images = future.result()
-                    if images:
-                        group.images = images
-                        stats.total_images += len(images)
-                        logger.debug(f"  ✓ {group.base_name} ({len(images)} images)")
-                    else:
-                        logger.debug(f"  ✗ {group.base_name} (no images)")
-                        stats.failed_image_extraction += 1
-                except Exception as e:
-                    logger.error(f"  ✗ {group.base_name}: {str(e)}")
-                    stats.failed_image_extraction += 1
+        # Collect images from variants in each group
+        for group in batch:
+            all_images = []
+            for variant in group.variants:
+                if hasattr(variant, 'raw_images') and variant.raw_images:
+                    all_images.extend(variant.raw_images)
+            # Remove duplicates while preserving order
+            seen = set()
+            group.images = [img for img in all_images if img and img not in seen and not seen.add(img)]
+            if group.images:
+                stats.total_images += len(group.images)
         
         # Phase 3: Enrich with Claude (sequential)
-        logger.info("\n→ Phase 3: Enriching with Claude AI...")
+        logger.info("\n→ Enriching with Claude AI...")
         for group in batch:
             try:
                 primary = group.get_primary_variant()

@@ -20,12 +20,12 @@ class ProductParser:
     Expected CSV columns:
     - "PIM | Brand" (required)
     - "UPC Code" (required, unique per variant)
-    - "Name" (required)
-    - "qty" (required)
-    - "PRICE" (required)
-    - "TAX" (optional)
-    - "VAT%" (optional)
-    - "Total with VAT" (optional)
+    - "English Description" (required)
+    - "COST" (required)
+    - "TAX  " (optional)
+    - "Category" (optional)
+    - "Sub Category" (optional)
+    - "Image 1 URL", "Image 2 URL", "Image 3 URL" (optional)
     
     Each row = one product variant with unique UPC.
     """
@@ -119,12 +119,17 @@ class ProductParser:
             raise
     
     def _validate_columns(self, df: pd.DataFrame):
-        """Validate that required columns exist"""
-        required_columns = ['PIM | Brand', 'UPC Code', 'Name', 'qty', 'PRICE']
-        missing = [col for col in required_columns if col not in df.columns]
+        """Validate that required columns exist - supports two formats"""
+        # Format 1: Original format with Name, qty, PRICE
+        format1 = ['PIM | Brand', 'UPC Code', 'Name', 'PRICE']
+        # Format 2: New format with English Description, COST
+        format2 = ['PIM | Brand', 'UPC Code', 'English Description', 'COST']
         
-        if missing:
-            raise ValueError(f"Missing required columns: {missing}")
+        missing1 = [col for col in format1 if col not in df.columns]
+        missing2 = [col for col in format2 if col not in df.columns]
+        
+        if missing1 and missing2:
+            raise ValueError(f"CSV must have either format 1 {format1} or format 2 {format2}")
     
     def _parse_row(
         self, 
@@ -139,15 +144,9 @@ class ProductParser:
         Returns:
             ProductData object if valid, None if should be skipped
         """
-        # Check for missing required fields
-        if pd.isna(row.get('UPC Code')) or pd.isna(row.get('Name')):
-            stats['skipped_incomplete'] += 1
-            logger.debug(f"Row {idx + 2}: Missing UPC Code or Name")
-            return None
-        
         # Extract and clean UPC
-        upc = str(row['UPC Code']).strip()
-        if not upc or upc.lower() == 'nan':
+        upc = str(row.get('UPC Code', '')).strip()
+        if not upc or upc.lower() == 'nan' or pd.isna(row.get('UPC Code')):
             stats['skipped_incomplete'] += 1
             logger.debug(f"Row {idx + 2}: Empty UPC Code")
             return None
@@ -166,25 +165,24 @@ class ProductParser:
             brand = 'Unknown'
             logger.debug(f"Row {idx + 2}: Missing brand, using 'Unknown'")
         
-        # Extract name
-        name = str(row.get('Name', '')).strip()
+        # Extract name - try both column names (English Description or Name)
+        name = str(row.get('English Description', row.get('Name', ''))).strip()
         if not name or name.lower() == 'nan':
             stats['skipped_incomplete'] += 1
             logger.debug(f"Row {idx + 2}: Empty product name")
             return None
         
-        # Extract quantity
+        # Extract quantity - try qty column or default to 1
         try:
             qty = int(float(row.get('qty', 1)))
             if qty <= 0:
                 qty = 1
         except (ValueError, TypeError):
             qty = 1
-            logger.debug(f"Row {idx + 2}: Invalid quantity, using 1")
         
-        # Extract price
+        # Extract price - try COST or PRICE column
         try:
-            price = float(row.get('PRICE', 0))
+            price = float(row.get('COST', row.get('PRICE', 0)))
             if price < 0:
                 logger.warning(f"Row {idx + 2}: Negative price {price}, using 0")
                 price = 0
@@ -206,6 +204,22 @@ class ProductParser:
         except (ValueError, TypeError):
             total_vat = 0.0
         
+        # Extract image URLs from CSV
+        images = []
+        for img_col in ['Image 1 URL', 'Image 2 URL', 'Image 3 URL']:
+            img_url = str(row.get(img_col, '')).strip()
+            if img_url and img_url.lower() != 'nan' and img_url.startswith('http'):
+                images.append(img_url)
+        
+        # Extract category info
+        category = str(row.get('Category', '')).strip()
+        if category.lower() == 'nan':
+            category = ''
+        
+        sub_category = str(row.get('Sub Category', '')).strip()
+        if sub_category.lower() == 'nan':
+            sub_category = ''
+        
         # Create ProductData object
         product = ProductData(
             brand=brand,
@@ -218,13 +232,17 @@ class ProductParser:
             total_with_vat=total_vat
         )
         
+        # Store images and category on the product object
+        product.raw_images = images
+        product.category = category if category else sub_category
+        
         # Validate product
         if not self._validate_product(product):
             stats['parsing_errors'] += 1
             logger.debug(f"Row {idx + 2}: Validation failed for {name}")
             return None
         
-        logger.debug(f"Row {idx + 2}: ✓ Parsed {brand} - {name}")
+        logger.debug(f"Row {idx + 2}: ✓ Parsed {brand} - {name} ({len(images)} images)")
         return product
     
     def _validate_product(self, product: ProductData) -> bool:
