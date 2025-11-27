@@ -183,6 +183,9 @@ class ProductEnrichmentPipeline:
             True if successful, False otherwise
         """
         try:
+            # Small delay to prevent rate limiting when running in parallel
+            time.sleep(0.1)
+            
             primary = group.get_primary_variant()
             if not primary:
                 return False

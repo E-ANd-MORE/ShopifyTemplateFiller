@@ -34,7 +34,7 @@ logs/
 *.log
 
 # Data files
-data/input/*.csv
+#data/input/*.csv
 data/output/*.csv
 
 # IDE

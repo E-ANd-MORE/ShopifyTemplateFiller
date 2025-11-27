@@ -58,8 +58,8 @@ API_CONFIG = {
 
 # Processing Configuration
 PROCESSING_CONFIG = {
-    "batch_size": int(os.getenv("BATCH_SIZE", 50)),  # Increased from 10 to 50 for faster processing
-    "max_workers": int(os.getenv("MAX_WORKERS", 10)),  # Increased from 5 to 10 for parallel processing
+    "batch_size": int(os.getenv("BATCH_SIZE", 100)),  
+    "max_workers": int(os.getenv("MAX_WORKERS", 5)),  # Increase from 5 to 10 for parallel processing
     "enable_checkpoints": True,
     "checkpoint_interval": 1,  # Save after each batch
     "records_per_file": int(os.getenv("RECORDS_PER_FILE", 1000)),  # Maximum records per output CSV

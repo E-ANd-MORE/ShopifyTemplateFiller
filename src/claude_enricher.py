@@ -6,10 +6,11 @@ import logging
 import json
 import re
 import hashlib
+import time
 from typing import List, Dict, Optional, Any
 from pathlib import Path
 
-from anthropic import Anthropic
+from anthropic import Anthropic, RateLimitError
 
 from config import ANTHROPIC_API_KEY, API_CONFIG, CACHE_DIR, SHOPIFY_CATEGORIES
 from src.models import ProductData
@@ -86,15 +87,27 @@ If no variants are found in the name, return: []
 Important: Extract ONLY what exists in the product name. Do NOT invent variants."""
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens['variants'],
-                temperature=self.temperature,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            # Retry logic for rate limiting
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=self.max_tokens['variants'],
+                        temperature=self.temperature,
+                        messages=[{
+                            "role": "user",
+                            "content": prompt
+                        }]
+                    )
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    else:
+                        raise
             
             response_text = message.content[0].text.strip()
             
@@ -154,15 +167,27 @@ Requirements:
 Return ONLY the description text, nothing else."""
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens['description'],
-                temperature=self.temperature,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            # Retry logic for rate limiting
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=self.max_tokens['description'],
+                        temperature=self.temperature,
+                        messages=[{
+                            "role": "user",
+                            "content": prompt
+                        }]
+                    )
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    else:
+                        raise
             
             description = message.content[0].text.strip()
             
@@ -189,65 +214,89 @@ Return ONLY the description text, nothing else."""
     
     def assign_category(self, brand: str, product_name: str) -> str:
         """
-        Assign product to Shopify Standard Product Taxonomy category.
+        Assign product to Shopify Standard Product Taxonomy category dynamically.
+        Uses keyword map as examples for Claude to understand patterns.
         
         Args:
             brand: Brand name
             product_name: Product name
             
         Returns:
-            Valid Shopify category in hierarchical format (e.g., "Beauty & Personal Care > Face Care")
+            Valid Shopify category in hierarchical format (e.g., "Health & Beauty > Hair Care")
         """
         cache_key = f"category|{product_name}"
         if cache_key in self.cache:
             return self.cache[cache_key]
         
-        categories_list = "\n".join([f"{i+1}. {cat}" for i, cat in enumerate(SHOPIFY_CATEGORIES)])
+        # Get keyword map for examples
+        keyword_map = self._get_keyword_map()
         
-        prompt = f"""Assign this product to ONE category from Shopify's Standard Product Taxonomy.
+        # Format examples for Claude
+        examples = []
+        for category, keywords in list(keyword_map.items())[:5]:  # Show 5 examples
+            examples.append(f"- {category}: {', '.join(keywords[:3])}")
+        examples_text = "\n".join(examples)
+        
+        prompt = f"""Assign this product to a Shopify Standard Product Taxonomy category.
 
 Brand: {brand}
 Product: {product_name}
 
-Available categories (use EXACT format):
-{categories_list}
+Use the hierarchical format: "Top Level > Subcategory"
 
-CRITICAL: Return ONLY the EXACT category string including the ">" separator.
-Example: "Beauty & Personal Care > Face Care"
+Example category patterns (for reference, you can create similar ones):
+{examples_text}
 
-Choose the most appropriate category based on the product type."""
+Based on the product name and brand, create an appropriate category in the format:
+"Health & Beauty > [Specific Category]"
+
+For beauty/personal care products, use subcategories like:
+- Hair Care (for shampoo, conditioner, hair products)
+- Skin Care (for face creams, serums, moisturizers)
+- Oral Care (for mouthwash, toothpaste, dental products)
+- Bath & Body (for body wash, soap, lotions, feminine care)
+- Makeup (for cosmetics, lipstick, foundation)
+- Fragrance (for perfumes, colognes)
+- Nail Care (for nail polish, manicure products)
+- Personal Care (for vitamins, supplements, health products)
+
+Return ONLY the category string in format: "Health & Beauty > [Subcategory]"
+Nothing else."""
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens['category'],
-                temperature=self.temperature,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            # Retry logic for rate limiting
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=self.max_tokens['category'],
+                        temperature=self.temperature,
+                        messages=[{
+                            "role": "user",
+                            "content": prompt
+                        }]
+                    )
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    else:
+                        raise
             
             response = message.content[0].text.strip()
             
             # Clean up response (remove quotes, extra whitespace)
             response = response.replace('"', '').replace("'", "").strip()
             
-            # Try exact match first
-            for cat in SHOPIFY_CATEGORIES:
-                if cat.lower() == response.lower():
-                    self.cache[cache_key] = cat
-                    self._save_cache()
-                    logger.debug(f"Assigned category '{cat}' to: {product_name}")
-                    return cat
-            
-            # Try partial match (look for category in response)
-            for cat in SHOPIFY_CATEGORIES:
-                if cat.lower() in response.lower():
-                    self.cache[cache_key] = cat
-                    self._save_cache()
-                    logger.debug(f"Assigned category '{cat}' to: {product_name}")
-                    return cat
+            # Validate format (should contain ">")
+            if ">" in response and len(response) < 100:
+                self.cache[cache_key] = response
+                self._save_cache()
+                logger.debug(f"Assigned category '{response}' to: {product_name}")
+                return response
             
             # Fallback: use keyword-based category assignment
             fallback_cat = self._guess_category_from_keywords(product_name)
@@ -258,16 +307,15 @@ Choose the most appropriate category based on the product type."""
             logger.error(f"Category assignment failed: {str(e)}")
             return self._guess_category_from_keywords(product_name)
     
-    def _guess_category_from_keywords(self, product_name: str) -> str:
+    def _get_keyword_map(self) -> Dict[str, List[str]]:
         """
-        Guess category based on product name keywords.
-        Fallback method when Claude fails or returns invalid category.
-        """
-        name_lower = product_name.lower()
+        Get keyword map for category assignment.
+        Used both as examples for Claude and for fallback keyword matching.
         
-        # Keyword mappings to Shopify Standard Taxonomy
-        # Using "Health & Beauty" as top-level (official Shopify taxonomy)
-        keyword_map = {
+        Returns:
+            Dict mapping categories to keyword lists
+        """
+        return {
             "Health & Beauty > Hair Care": [
                 "shampoo", "conditioner", "hair", "scalp", "haircare"
             ],
@@ -297,6 +345,16 @@ Choose the most appropriate category based on the product type."""
                 "vitamin", "supplement", "medicine", "health", "wellness"
             ],
         }
+    
+    def _guess_category_from_keywords(self, product_name: str) -> str:
+        """
+        Guess category based on product name keywords.
+        Fallback method when Claude fails or returns invalid category.
+        """
+        name_lower = product_name.lower()
+        
+        # Get keyword map
+        keyword_map = self._get_keyword_map()
         
         # Check keywords
         for category, keywords in keyword_map.items():
@@ -345,15 +403,27 @@ Examples:
 """
 
         try:
-            message = self.client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens['clean_name'],
-                temperature=self.temperature,
-                messages=[{
-                    "role": "user",
-                    "content": prompt
-                }]
-            )
+            # Retry logic for rate limiting
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=self.max_tokens['clean_name'],
+                        temperature=self.temperature,
+                        messages=[{
+                            "role": "user",
+                            "content": prompt
+                        }]
+                    )
+                    break
+                except RateLimitError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                    else:
+                        raise
             
             cleaned_name = message.content[0].text.strip()
             
