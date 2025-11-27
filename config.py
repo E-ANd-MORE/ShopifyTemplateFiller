@@ -31,7 +31,7 @@ API_CONFIG = {
         "endpoint": "https://api.tavily.com/search",
         "timeout": 30,
         "max_retries": 3,
-        "rate_limit_delay": 0.5,  # seconds between requests
+        "rate_limit_delay": 0.2,  # Reduced from 0.5s to 0.2s (not used in current flow)
         "max_results": 10,  # Get more results to filter out login pages
         "search_depth": "advanced",  # Use advanced search for better results
     },
@@ -39,7 +39,7 @@ API_CONFIG = {
         "endpoint": "https://api.firecrawl.dev/v1/scrape",
         "timeout": 45,
         "max_retries": 3,
-        "rate_limit_delay": 1.0,  # seconds between requests
+        "rate_limit_delay": 0.3,  # Reduced from 1.0s to 0.3s (not used in current flow)
         "include_tags": ["img"],  # Focus on images
         "wait_for": 2000,  # Wait 2s for page to load images
     },
@@ -58,11 +58,12 @@ API_CONFIG = {
 
 # Processing Configuration
 PROCESSING_CONFIG = {
-    "batch_size": int(os.getenv("BATCH_SIZE", 10)),
-    "max_workers": int(os.getenv("MAX_WORKERS", 5)),
+    "batch_size": int(os.getenv("BATCH_SIZE", 50)),  # Increased from 10 to 50 for faster processing
+    "max_workers": int(os.getenv("MAX_WORKERS", 10)),  # Increased from 5 to 10 for parallel processing
     "enable_checkpoints": True,
     "checkpoint_interval": 1,  # Save after each batch
     "records_per_file": int(os.getenv("RECORDS_PER_FILE", 1000)),  # Maximum records per output CSV
+    "parallel_enrichment": True,  # Enable parallel Claude API calls
 }
 
 # Domain Priority for URL Search (Brand website FIRST, then retailers)

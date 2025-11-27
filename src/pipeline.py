@@ -172,6 +172,59 @@ class ProductEnrichmentPipeline:
             stats.processing_time_sec = time.time() - start_time
             return False, stats
     
+    def _enrich_single_group(self, group: ProductGroup) -> bool:
+        """
+        Enrich a single product group with Claude AI.
+        
+        Args:
+            group: ProductGroup to enrich
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            primary = group.get_primary_variant()
+            if not primary:
+                return False
+            
+            # Clean product name first
+            cleaned_name = self.enricher.clean_product_name(
+                group.base_name,
+                group.brand
+            )
+            group.base_name = cleaned_name
+            
+            # Generate description
+            group.description = self.enricher.generate_description(
+                group.brand,
+                cleaned_name,
+                primary.price
+            )
+            
+            # Assign category
+            group.category = self.enricher.assign_category(
+                group.brand,
+                cleaned_name
+            )
+            
+            # Generate tags
+            group.tags = self.enricher.generate_tags(
+                group.brand,
+                cleaned_name,
+                group.category
+            )
+            
+            # Extract variants from each product in group
+            for variant in group.variants:
+                variant.variants = self.enricher.extract_variants(variant.name)
+            
+            logger.debug(f"  ✓ {cleaned_name} (enriched)")
+            return True
+            
+        except Exception as e:
+            logger.error(f"  ✗ {group.base_name}: {str(e)}")
+            return False
+    
     def _process_batch(self, batch: List[ProductGroup], stats: ProcessingStats):
         """
         Process a single batch - SIMPLIFIED VERSION (NO API CALLS FOR URL/IMAGES).
@@ -196,51 +249,37 @@ class ProductEnrichmentPipeline:
             if group.images:
                 stats.total_images += len(group.images)
         
-        # Phase 3: Enrich with Claude (sequential)
-        logger.info("\n→ Enriching with Claude AI...")
-        for group in batch:
-            try:
-                primary = group.get_primary_variant()
-                if not primary:
-                    continue
+        # Phase 3: Enrich with Claude (parallel for speed)
+        logger.info("\n→ Enriching with Claude AI (parallel)...")
+        
+        if PROCESSING_CONFIG.get('parallel_enrichment', False):
+            # Parallel enrichment using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {executor.submit(self._enrich_single_group, group): group for group in batch}
                 
-                # Clean product name first
-                cleaned_name = self.enricher.clean_product_name(
-                    group.base_name,
-                    group.brand
-                )
-                group.base_name = cleaned_name
-                
-                # Generate description
-                group.description = self.enricher.generate_description(
-                    group.brand,
-                    cleaned_name,
-                    primary.price
-                )
-                
-                # Assign category
-                group.category = self.enricher.assign_category(
-                    group.brand,
-                    cleaned_name
-                )
-                
-                # Generate tags
-                group.tags = self.enricher.generate_tags(
-                    group.brand,
-                    cleaned_name,
-                    group.category
-                )
-                
-                # Extract variants from each product in group
-                for variant in group.variants:
-                    variant.variants = self.enricher.extract_variants(variant.name)
-                
-                stats.successfully_processed += 1
-                logger.debug(f"  ✓ {cleaned_name} (enriched)")
-                
-            except Exception as e:
-                logger.error(f"  ✗ {group.base_name}: {str(e)}")
-                stats.failed_enrichment += 1
+                for future in as_completed(futures):
+                    group = futures[future]
+                    try:
+                        success = future.result()
+                        if success:
+                            stats.successfully_processed += 1
+                        else:
+                            stats.failed_enrichment += 1
+                    except Exception as e:
+                        logger.error(f"  ✗ {group.base_name}: {str(e)}")
+                        stats.failed_enrichment += 1
+        else:
+            # Sequential enrichment (original behavior)
+            for group in batch:
+                try:
+                    success = self._enrich_single_group(group)
+                    if success:
+                        stats.successfully_processed += 1
+                    else:
+                        stats.failed_enrichment += 1
+                except Exception as e:
+                    logger.error(f"  ✗ {group.base_name}: {str(e)}")
+                    stats.failed_enrichment += 1
     
     def _generate_batch_output(
         self,
