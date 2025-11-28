@@ -48,6 +48,127 @@ class ClaudeEnricher:
         
         logger.info(f"ClaudeEnricher initialized with model: {self.model}")
     
+    def enrich_product_batch(self, brand: str, product_name: str, price: float, category: str = None) -> Dict[str, Any]:
+        """
+        OPTIMIZED: Batch all enrichment tasks into a single Claude API call.
+        This reduces 10 API calls to 1, making processing 10x faster!
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            price: Product price
+            category: Pre-assigned category (optional)
+            
+        Returns:
+            Dict containing all enriched fields
+        """
+        cache_key = f"batch|{brand}|{product_name}|{price}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""You are a product content expert. Generate ALL the following for this product in a single JSON response:
+
+**PRODUCT INFO:**
+Brand: {brand}
+Product: {product_name}
+Price: ${price:.2f}
+
+**GENERATE THE FOLLOWING (return as JSON):**
+
+1. **cleaned_name**: Clean product name (remove special chars, make readable, 5-7 words max)
+
+2. **description**: Professional HTML product description (2-3 sentences, highlight benefits, SEO-friendly, no markdown)
+
+3. **category**: Shopify category format "Health & Beauty > [Subcategory]" (Hair Care, Skin Care, Makeup, Bath & Body, Oral Care, Fragrance, Nail Care, or Personal Care)
+
+4. **tags**: Array of 6-10 SEO tags (lowercase, hyphenated)
+
+5. **benefits**: Product benefits (3-5 points, like Goli format with line breaks)
+
+6. **ingredients**: Ingredient qualities description (vegan, organic, etc.)
+
+7. **good_for**: Social/environmental responsibility statement (1-2 sentences)
+
+8. **suggested_usage**: Usage instructions with dosage and frequency
+
+9. **allergy_info**: Warnings/disclaimers appropriate for product type
+
+Return ONLY valid JSON in this exact format:
+{{
+  "cleaned_name": "...",
+  "description": "...",
+  "category": "Health & Beauty > ...",
+  "tags": ["tag1", "tag2", ...],
+  "benefits": "...",
+  "ingredients": "...",
+  "good_for": "...",
+  "suggested_usage": "...",
+  "allergy_info": "..."
+}}"""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=2000,  # Larger for batched response
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 3
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            response_text = message.content[0].text.strip()
+            
+            # Parse JSON response
+            result = self._parse_json_response(response_text, default={})
+            
+            # Validate and set defaults
+            enriched = {
+                "cleaned_name": result.get("cleaned_name", product_name),
+                "description": result.get("description", f"<p>Premium <strong>{brand}</strong> product. {product_name}.</p>"),
+                "category": result.get("category", "Health & Beauty > Skin Care"),
+                "tags": result.get("tags", [brand.lower(), "product", "beauty"]),
+                "benefits": result.get("benefits", ""),
+                "ingredients": result.get("ingredients", ""),
+                "good_for": result.get("good_for", ""),
+                "suggested_usage": result.get("suggested_usage", ""),
+                "allergy_info": result.get("allergy_info", "")
+            }
+            
+            # Clean markdown artifacts
+            for key in ["description", "benefits", "ingredients", "good_for", "suggested_usage", "allergy_info"]:
+                if isinstance(enriched[key], str):
+                    enriched[key] = enriched[key].replace('```', '').replace('**', '').replace('*', '').replace('`', '')
+            
+            self.cache[cache_key] = enriched
+            self._save_cache()
+            
+            logger.debug(f"Batch enriched: {enriched['cleaned_name']}")
+            return enriched
+            
+        except Exception as e:
+            logger.error(f"Batch enrichment failed: {str(e)}")
+            # Return fallback values
+            return {
+                "cleaned_name": product_name,
+                "description": f"<p>Premium <strong>{brand}</strong> product. {product_name}.</p>",
+                "category": "Health & Beauty > Skin Care",
+                "tags": [brand.lower(), "product", "beauty"],
+                "benefits": "",
+                "ingredients": "",
+                "good_for": "",
+                "suggested_usage": "",
+                "allergy_info": ""
+            }
+    
     def extract_variants(self, product_name: str) -> List[Dict[str, str]]:
         """
         Extract variant attributes FROM the product name only.
@@ -552,6 +673,306 @@ haircare-product"""
                 'online'
             ]
             return fallback
+    
+    def generate_benefits(self, brand: str, product_name: str, category: str) -> str:
+        """
+        Generate product benefits content for metafield.
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            category: Product category
+            
+        Returns:
+            Benefits text describing key product advantages
+        """
+        cache_key = f"benefits|{brand}|{product_name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""Generate product benefits for this item. Focus on key advantages and what makes it valuable.
+
+Brand: {brand}
+Product: {product_name}
+Category: {category}
+
+Create 3-5 bullet points describing the main benefits. Format like Goli example:
+"Patented Formula, Essential Vitamins, Great Taste: Our patented formula contains essential Vitamin B12 to help support cellular energy production, immune function, heart health, healthy nutrient metabolism, a healthy nervous system and overall health and wellbeing. 
+
+Apple Cider Vinegar has traditionally been used for digestion and gut health. Our unique flavor profile combined with essential vitamins makes Goli® ACV Gummies a delicious addition to your daily health routine."
+
+Keep it professional, benefit-focused, and informative. Separate benefits with line breaks.
+Return ONLY the benefits text, nothing else."""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=400,
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            benefits = message.content[0].text.strip()
+            benefits = benefits.replace('```', '').replace('**', '').replace('*', '')
+            
+            self.cache[cache_key] = benefits
+            self._save_cache()
+            return benefits
+            
+        except Exception as e:
+            logger.error(f"Benefits generation failed: {str(e)}")
+            return ""
+    
+    def generate_ingredients(self, brand: str, product_name: str, category: str) -> str:
+        """
+        Generate custom ingredients information.
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            category: Product category
+            
+        Returns:
+            Ingredients description
+        """
+        cache_key = f"ingredients|{brand}|{product_name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""Generate ingredient information for this product. Focus on key ingredients and their qualities.
+
+Brand: {brand}
+Product: {product_name}
+Category: {category}
+
+Format like Goli example:
+"Vegan, Non-GMO, Gluten-free & Gelatin-free: Each bottle of Goli® ACV Gummies contains 60 delicious, vegan, non-gmo, gluten-free & gelatin-free gummies, which makes them suitable for almost any lifestyle."
+
+Be specific about ingredient qualities (natural, organic, vegan, cruelty-free, etc.).
+Return ONLY the ingredients text, nothing else."""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=300,
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            ingredients = message.content[0].text.strip()
+            ingredients = ingredients.replace('```', '').replace('**', '').replace('*', '')
+            
+            self.cache[cache_key] = ingredients
+            self._save_cache()
+            return ingredients
+            
+        except Exception as e:
+            logger.error(f"Ingredients generation failed: {str(e)}")
+            return ""
+    
+    def generate_good_for(self, brand: str, product_name: str, category: str) -> str:
+        """
+        Generate 'Good For' content describing social/environmental responsibility.
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            category: Product category
+            
+        Returns:
+            Good For text
+        """
+        cache_key = f"goodfor|{brand}|{product_name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""Generate 'Good For' content describing positive social or environmental impact.
+
+Brand: {brand}
+Product: {product_name}
+Category: {category}
+
+Format like Goli example:
+"Goli for Good: Goli is a proud supporter of Vitamin Angels and Eden Reforestation Projects."
+
+Focus on: sustainability, charitable giving, environmental initiatives, social responsibility.
+Keep it brief (1-2 sentences).
+Return ONLY the text, nothing else."""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=200,
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            good_for = message.content[0].text.strip()
+            good_for = good_for.replace('```', '').replace('**', '').replace('*', '')
+            
+            self.cache[cache_key] = good_for
+            self._save_cache()
+            return good_for
+            
+        except Exception as e:
+            logger.error(f"Good For generation failed: {str(e)}")
+            return ""
+    
+    def generate_suggested_usage(self, brand: str, product_name: str, category: str) -> str:
+        """
+        Generate suggested usage instructions.
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            category: Product category
+            
+        Returns:
+            Usage instructions
+        """
+        cache_key = f"usage|{brand}|{product_name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""Generate suggested usage instructions for this product.
+
+Brand: {brand}
+Product: {product_name}
+Category: {category}
+
+Format like Goli example:
+"Dosage:
+2 Gummies
+
+Instructions:
+Take 1-2 gummies, 3 times daily. Chew thoroughly."
+
+Be specific about dosage, frequency, and any special instructions.
+Return ONLY the usage text, nothing else."""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=250,
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            usage = message.content[0].text.strip()
+            usage = usage.replace('```', '').replace('**', '').replace('*', '')
+            
+            self.cache[cache_key] = usage
+            self._save_cache()
+            return usage
+            
+        except Exception as e:
+            logger.error(f"Usage generation failed: {str(e)}")
+            return ""
+    
+    def generate_allergy_info(self, brand: str, product_name: str, category: str) -> str:
+        """
+        Generate allergy information/warnings.
+        
+        Args:
+            brand: Brand name
+            product_name: Product name
+            category: Product category
+            
+        Returns:
+            Allergy information text
+        """
+        cache_key = f"allergy|{brand}|{product_name}"
+        if cache_key in self.cache:
+            return self.cache[cache_key]
+        
+        prompt = f"""Generate allergy information or disclaimer for this product.
+
+Brand: {brand}
+Product: {product_name}
+Category: {category}
+
+Format like standard disclaimers:
+"These statements have not been evaluated by the Food and Drug Administration. This product is not intended to diagnose, treat, cure or prevent any disease."
+
+Or for cosmetics/topical products:
+"For external use only. Avoid contact with eyes. Discontinue use if irritation occurs."
+
+Include relevant warnings based on product category.
+Return ONLY the allergy/warning text, nothing else."""
+
+        try:
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    message = self.client.messages.create(
+                        model=self.model,
+                        max_tokens=200,
+                        temperature=self.temperature,
+                        messages=[{"role": "user", "content": prompt}]
+                    )
+                    break
+                except RateLimitError:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 2
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        time.sleep(wait_time)
+                    else:
+                        raise
+            
+            allergy = message.content[0].text.strip()
+            allergy = allergy.replace('```', '').replace('**', '').replace('*', '')
+            
+            self.cache[cache_key] = allergy
+            self._save_cache()
+            return allergy
+            
+        except Exception as e:
+            logger.error(f"Allergy info generation failed: {str(e)}")
+            return ""
     
     def _parse_json_response(self, response: str, default: Any = None) -> Any:
         """

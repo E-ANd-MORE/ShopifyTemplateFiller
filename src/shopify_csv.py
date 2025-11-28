@@ -47,6 +47,11 @@ class ShopifyCSVGenerator:
         'Google Shopping / Custom Label 0', 'Google Shopping / Custom Label 1',
         'Google Shopping / Custom Label 2', 'Google Shopping / Custom Label 3',
         'Google Shopping / Custom Label 4',
+        'Allergy Information (product.metafields.custom.allergy_information)',
+        'Benefits (product.metafields.custom.benefits)',
+        'Custom Ingredients (product.metafields.custom.custom_ingredients)',
+        'Good For (product.metafields.custom.good_for)',
+        'Suggested Usage (product.metafields.custom.suggested_use)',
         'Variant Image', 'Variant Weight Unit', 'Variant Tax Code',
         'Cost per item', 'Status'
     ]
@@ -254,6 +259,13 @@ class ShopifyCSVGenerator:
                 row_data = shared_data.copy()
                 row_data['Title'] = group.base_name
                 row_data['Body (HTML)'] = group.description or ''
+                
+                # Add benefit metafields
+                row_data['Allergy Information (product.metafields.custom.allergy_information)'] = getattr(group, 'allergy_info', '')
+                row_data['Benefits (product.metafields.custom.benefits)'] = getattr(group, 'benefits', '')
+                row_data['Custom Ingredients (product.metafields.custom.custom_ingredients)'] = getattr(group, 'ingredients', '')
+                row_data['Good For (product.metafields.custom.good_for)'] = getattr(group, 'good_for', '')
+                row_data['Suggested Usage (product.metafields.custom.suggested_use)'] = getattr(group, 'suggested_usage', '')
             else:
                 # Subsequent rows: Keep Product Category consistent across all variants
                 # Per Shopify Rule 2: All variants must have same Product Category
@@ -267,6 +279,11 @@ class ShopifyCSVGenerator:
                     'Tags': '',
                     'Published': '',
                     'Status': '',
+                    'Allergy Information (product.metafields.custom.allergy_information)': '',
+                    'Benefits (product.metafields.custom.benefits)': '',
+                    'Custom Ingredients (product.metafields.custom.custom_ingredients)': '',
+                    'Good For (product.metafields.custom.good_for)': '',
+                    'Suggested Usage (product.metafields.custom.suggested_use)': '',
                 }
             
             # If this variant has images, create one row per image
@@ -480,6 +497,18 @@ class ShopifyCSVGenerator:
         row['Gift Card'] = 'FALSE'
         row['SEO Title'] = ''
         row['SEO Description'] = ''
+        
+        # Benefit metafields - only set if not already set
+        if 'Allergy Information (product.metafields.custom.allergy_information)' not in row:
+            row['Allergy Information (product.metafields.custom.allergy_information)'] = ''
+        if 'Benefits (product.metafields.custom.benefits)' not in row:
+            row['Benefits (product.metafields.custom.benefits)'] = ''
+        if 'Custom Ingredients (product.metafields.custom.custom_ingredients)' not in row:
+            row['Custom Ingredients (product.metafields.custom.custom_ingredients)'] = ''
+        if 'Good For (product.metafields.custom.good_for)' not in row:
+            row['Good For (product.metafields.custom.good_for)'] = ''
+        if 'Suggested Usage (product.metafields.custom.suggested_use)' not in row:
+            row['Suggested Usage (product.metafields.custom.suggested_use)'] = ''
         
         # Google Shopping fields (empty)
         row['Google Shopping / Google Product Category'] = ''

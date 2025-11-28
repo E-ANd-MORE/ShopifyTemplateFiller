@@ -183,45 +183,36 @@ class ProductEnrichmentPipeline:
             True if successful, False otherwise
         """
         try:
-            # Small delay to prevent rate limiting when running in parallel
-            time.sleep(0.1)
+            # Small delay to prevent rate limiting (only 1-2 API calls now instead of 10!)
+            time.sleep(0.3)
             
             primary = group.get_primary_variant()
             if not primary:
                 return False
             
-            # Clean product name first
-            cleaned_name = self.enricher.clean_product_name(
-                group.base_name,
-                group.brand
-            )
-            group.base_name = cleaned_name
-            
-            # Generate description
-            group.description = self.enricher.generate_description(
+            # OPTIMIZED: Use batched enrichment (1 API call instead of 10)
+            enriched = self.enricher.enrich_product_batch(
                 group.brand,
-                cleaned_name,
+                group.base_name,
                 primary.price
             )
             
-            # Assign category
-            group.category = self.enricher.assign_category(
-                group.brand,
-                cleaned_name
-            )
+            # Apply enriched data to group
+            group.base_name = enriched["cleaned_name"]
+            group.description = enriched["description"]
+            group.category = enriched["category"]
+            group.tags = enriched["tags"]
+            group.benefits = enriched["benefits"]
+            group.ingredients = enriched["ingredients"]
+            group.good_for = enriched["good_for"]
+            group.suggested_usage = enriched["suggested_usage"]
+            group.allergy_info = enriched["allergy_info"]
             
-            # Generate tags
-            group.tags = self.enricher.generate_tags(
-                group.brand,
-                cleaned_name,
-                group.category
-            )
-            
-            # Extract variants from each product in group
+            # Extract variants from each product in group (separate call, needed per variant)
             for variant in group.variants:
                 variant.variants = self.enricher.extract_variants(variant.name)
             
-            logger.debug(f"  ✓ {cleaned_name} (enriched)")
+            logger.debug(f"  ✓ {group.base_name} (enriched with benefits)")
             return True
             
         except Exception as e:

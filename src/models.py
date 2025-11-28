@@ -73,6 +73,13 @@ class ProductGroup:
     category: str = "Other"
     tags: List[str] = field(default_factory=list)
     
+    # Benefit metafields
+    allergy_info: str = ""
+    benefits: str = ""
+    ingredients: str = ""
+    good_for: str = ""
+    suggested_usage: str = ""
+    
     def add_variant(self, product: ProductData):
         """Add a variant to this product group"""
         self.variants.append(product)

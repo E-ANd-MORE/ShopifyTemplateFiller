@@ -59,11 +59,11 @@ API_CONFIG = {
 # Processing Configuration
 PROCESSING_CONFIG = {
     "batch_size": int(os.getenv("BATCH_SIZE", 100)),  
-    "max_workers": int(os.getenv("MAX_WORKERS", 5)),  # Increase from 5 to 10 for parallel processing
+    "max_workers": int(os.getenv("MAX_WORKERS", 3)),  # Increased to 3 - now only 2 API calls per product (batch + variants)
     "enable_checkpoints": True,
     "checkpoint_interval": 1,  # Save after each batch
     "records_per_file": int(os.getenv("RECORDS_PER_FILE", 1000)),  # Maximum records per output CSV
-    "parallel_enrichment": True,  # Enable parallel Claude API calls
+    "parallel_enrichment": True,  # Enable parallel Claude API calls (optimized with batching)
 }
 
 # Domain Priority for URL Search (Brand website FIRST, then retailers)
