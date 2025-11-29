@@ -7,7 +7,7 @@ import csv
 import re
 import unicodedata
 import pandas as pd
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional
 from io import StringIO
 
 from src.models import ProductGroup, ProductData
@@ -225,11 +225,18 @@ class ShopifyCSVGenerator:
             return rows
         
         # Shared data for ALL variants (same handle, no repeated title)
+        # Extract subcategory (part after ">") for Type field
+        subcategory = ''
+        if group.category and '>' in group.category:
+            subcategory = group.category.split('>')[-1].strip()
+        elif group.category:
+            subcategory = group.category
+        
         shared_data = {
             'Handle': handle,
             'Vendor': group.brand,
-            'Product Category': group.category or 'Other',
-            'Type': group.category or '',
+            'Product Category': '',  # Keep empty as requested
+            'Type': subcategory,  # Only the part after ">", e.g., "Oral Care"
             'Tags': ','.join(group.tags) if group.tags else '',
             'Published': 'TRUE',
             'Status': 'active',
@@ -267,15 +274,14 @@ class ShopifyCSVGenerator:
                 row_data['Good For (product.metafields.custom.good_for)'] = getattr(group, 'good_for', '')
                 row_data['Suggested Usage (product.metafields.custom.suggested_use)'] = getattr(group, 'suggested_usage', '')
             else:
-                # Subsequent rows: Keep Product Category consistent across all variants
-                # Per Shopify Rule 2: All variants must have same Product Category
+                # Subsequent rows: Keep Product Category and Type consistent across all variants
                 row_data = {
                     'Handle': handle,
                     'Title': '',  # Empty for subsequent variants
                     'Body (HTML)': '',
                     'Vendor': group.brand,  # Keep vendor for all variants
-                    'Product Category': group.category or 'Other',  # CRITICAL: Same category for all variants
-                    'Type': group.category or '',  # Keep type consistent
+                    'Product Category': '',  # Keep empty
+                    'Type': subcategory,  # Keep type consistent with first variant
                     'Tags': '',
                     'Published': '',
                     'Status': '',
@@ -447,8 +453,8 @@ class ShopifyCSVGenerator:
         shared_data: Dict,
         variant: ProductData,
         variant_options: Dict,
-        image_url: str = None,
-        image_position: int = None,
+        image_url: Optional[str] = None,
+        image_position: Optional[int] = None,
         is_first: bool = True
     ) -> Dict:
         """Create a single CSV row for a variant"""

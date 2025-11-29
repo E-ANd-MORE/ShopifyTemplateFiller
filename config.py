@@ -52,6 +52,12 @@ API_CONFIG = {
             "category": 50,
             "tags": 200,
             "clean_name": 100,
+        },
+        "rate_limit": {
+            "requests_per_minute": 50,  # Anthropic rate limit
+            "adaptive_delay": True,  # Automatically adjust delays
+            "min_delay": 0.1,  # Minimum delay between requests (seconds)
+            "max_delay": 2.0,  # Maximum delay on rate limit hit (seconds)
         }
     }
 }

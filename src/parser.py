@@ -4,6 +4,7 @@ Parses input CSV and creates ProductData objects for each row.
 Each row represents ONE product variant.
 """
 import logging
+import re
 import pandas as pd
 from typing import List, Tuple, Dict
 from pathlib import Path
@@ -180,29 +181,37 @@ class ProductParser:
         except (ValueError, TypeError):
             qty = 1
         
-        # Extract price - try COST or PRICE column
+        # Extract cost
         try:
-            price = float(row.get('COST', row.get('PRICE', 0)))
-            if price < 0:
-                logger.warning(f"Row {idx + 2}: Negative price {price}, using 0")
-                price = 0
+            cost = float(row.get('COST', row.get('PRICE', 0)))
+            if cost < 0:
+                logger.warning(f"Row {idx + 2}: Negative cost {cost}, using 0")
+                cost = 0
         except (ValueError, TypeError):
-            logger.warning(f"Row {idx + 2}: Invalid price, using 0")
-            price = 0
+            logger.warning(f"Row {idx + 2}: Invalid cost, using 0")
+            cost = 0
         
-        # Extract optional fields
+        # Extract VAT percentage from TAX column
         tax = str(row.get('TAX  ', '')).strip()  # Note: double space in column name
-        if tax.lower() == 'nan':
-            tax = 'No tax info'
+        vat_percentage = 0.0
         
-        vat = str(row.get('VAT%', '')).strip()
-        if vat.lower() == 'nan':
-            vat = '0%'
+        if tax and tax.lower() != 'nan':
+            # Parse VAT percentage from strings like "TAX 15%" or "15%"
+            vat_match = re.search(r'(\d+(?:\.\d+)?)\s*%', tax)
+            if vat_match:
+                vat_percentage = float(vat_match.group(1))
         
-        try:
-            total_vat = float(row.get('Total with VAT', 0))
-        except (ValueError, TypeError):
-            total_vat = 0.0
+        # Calculate final price: Cost + 65% markup + VAT
+        # Formula: Price = Cost × (1 + 0.65) × (1 + VAT%)
+        price_with_markup = cost * 1.65  # Add 65% markup
+        price = price_with_markup * (1 + vat_percentage / 100)  # Add VAT
+        
+        # Store readable tax string
+        if tax.lower() == 'nan' or not tax:
+            tax = f'VAT {vat_percentage}%' if vat_percentage > 0 else 'No tax info'
+        
+        vat = f'{vat_percentage}%'
+        total_vat = price  # Final price includes VAT
         
         # Extract image URLs from CSV
         images = []

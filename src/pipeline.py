@@ -58,13 +58,14 @@ class ProductEnrichmentPipeline:
         
         logger.info("Pipeline initialized")
     
-    def run(self, input_file: str, output_file: str) -> Tuple[bool, ProcessingStats]:
+    def run(self, input_file: str, output_file: str, max_batches: int = None) -> Tuple[bool, ProcessingStats]:
         """
         Run the complete pipeline.
         
         Args:
             input_file: Path to input CSV
             output_file: Path to output Shopify CSV
+            max_batches: Maximum number of batches to process (None = process all)
             
         Returns:
             Tuple of (success: bool, stats: ProcessingStats)
@@ -109,6 +110,8 @@ class ProductEnrichmentPipeline:
             # Step 3: Process groups in batches
             logger.info(f"\n--- STEP 3: PROCESSING {len(product_groups)} PRODUCT GROUPS ---")
             logger.info(f"Batch size: {self.batch_size}")
+            if max_batches:
+                logger.info(f"Max batches limit: {max_batches}")
             
             all_output_files = []
             
@@ -116,6 +119,12 @@ class ProductEnrichmentPipeline:
                 batch = product_groups[batch_idx:batch_idx + self.batch_size]
                 batch_num = (batch_idx // self.batch_size) + 1
                 total_batches = (len(product_groups) + self.batch_size - 1) // self.batch_size
+                
+                # Check if we've reached the max batch limit
+                if max_batches and batch_num > max_batches:
+                    logger.info(f"\n⚠️  Reached max batch limit ({max_batches}). Stopping processing.")
+                    logger.info(f"Processed {batch_num - 1} out of {total_batches} total batches")
+                    break
                 
                 logger.info(f"\n{'='*60}")
                 logger.info(f"BATCH {batch_num}/{total_batches}")
@@ -183,9 +192,7 @@ class ProductEnrichmentPipeline:
             True if successful, False otherwise
         """
         try:
-            # Small delay to prevent rate limiting (only 1-2 API calls now instead of 10!)
-            time.sleep(0.3)
-            
+            # Rate limiting is now handled adaptively in ClaudeEnricher
             primary = group.get_primary_variant()
             if not primary:
                 return False

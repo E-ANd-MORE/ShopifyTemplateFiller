@@ -99,6 +99,13 @@ Required environment variables (in .env):
     )
     
     parser.add_argument(
+        '--max-batches',
+        type=int,
+        default=None,
+        help='Maximum number of batches to process (stops after this many batches)'
+    )
+    
+    parser.add_argument(
         '--no-checkpoints',
         action='store_true',
         help='Disable checkpoint saving'
@@ -204,7 +211,7 @@ def main():
         pipeline = ProductEnrichmentPipeline()
         print("✓ Pipeline initialized\n")
         
-        success, stats = pipeline.run(str(input_file), str(output_file))
+        success, stats = pipeline.run(str(input_file), str(output_file), max_batches=args.max_batches)
         
         if success:
             logger.info("\n✅ Pipeline completed successfully!")

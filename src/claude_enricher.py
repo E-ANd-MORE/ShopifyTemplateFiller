@@ -46,7 +46,66 @@ class ClaudeEnricher:
         self.cache_file = Path(CACHE_DIR) / 'claude_cache.json'
         self.cache = self._load_cache()
         
+        # Rate limiting setup
+        self.rate_config = self.config.get('rate_limit', {})
+        self.requests_per_minute = self.rate_config.get('requests_per_minute', 50)
+        self.adaptive_delay = self.rate_config.get('adaptive_delay', True)
+        self.min_delay = self.rate_config.get('min_delay', 0.1)
+        self.max_delay = self.rate_config.get('max_delay', 2.0)
+        
+        # Track recent requests for rate limiting
+        from collections import deque
+        self.request_times = deque(maxlen=self.requests_per_minute)
+        self.consecutive_rate_limits = 0
+        
         logger.info(f"ClaudeEnricher initialized with model: {self.model}")
+        logger.info(f"Rate limiting: {self.requests_per_minute} req/min, adaptive={self.adaptive_delay}")
+    
+    def _adaptive_rate_limit(self):
+        """
+        Smart rate limiting that adapts based on API responses.
+        Prevents 429 errors while maximizing throughput.
+        """
+        current_time = time.time()
+        
+        # Remove requests older than 60 seconds
+        while self.request_times and current_time - self.request_times[0] > 60:
+            self.request_times.popleft()
+        
+        # Check if we're approaching rate limit
+        if len(self.request_times) >= self.requests_per_minute * 0.9:  # 90% threshold
+            # Calculate time to wait until oldest request expires
+            if self.request_times:
+                oldest_request = self.request_times[0]
+                wait_time = 60 - (current_time - oldest_request)
+                if wait_time > 0:
+                    logger.debug(f"Rate limit approaching, waiting {wait_time:.2f}s")
+                    time.sleep(wait_time + 0.1)  # Small buffer
+                    return
+        
+        # Adaptive delay based on recent rate limit hits
+        if self.adaptive_delay and self.consecutive_rate_limits > 0:
+            # Increase delay exponentially with consecutive rate limits
+            delay = min(self.min_delay * (2 ** self.consecutive_rate_limits), self.max_delay)
+            logger.debug(f"Adaptive delay: {delay:.2f}s (rate limits: {self.consecutive_rate_limits})")
+            time.sleep(delay)
+        else:
+            # Minimum delay between requests
+            time.sleep(self.min_delay)
+        
+        # Track this request
+        self.request_times.append(current_time)
+    
+    def _handle_rate_limit_success(self):
+        """Reset rate limit counter on successful request"""
+        if self.consecutive_rate_limits > 0:
+            logger.debug(f"Request successful, resetting rate limit counter")
+            self.consecutive_rate_limits = 0
+    
+    def _handle_rate_limit_error(self):
+        """Increment rate limit counter on 429 error"""
+        self.consecutive_rate_limits += 1
+        logger.warning(f"Rate limit hit (consecutive: {self.consecutive_rate_limits})")
     
     def enrich_product_batch(self, brand: str, product_name: str, price: float, category: str = None) -> Dict[str, Any]:
         """
@@ -79,7 +138,7 @@ Price: ${price:.2f}
 
 2. **description**: Professional HTML product description (2-3 sentences, highlight benefits, SEO-friendly, no markdown)
 
-3. **category**: Shopify category format "Health & Beauty > [Subcategory]" (Hair Care, Skin Care, Makeup, Bath & Body, Oral Care, Fragrance, Nail Care, or Personal Care)
+3. **category**: Product category in format "Main Category > Subcategory" (e.g., "Health & Beauty > Hair Care", "Health & Beauty > Skincare", "Health & Beauty > Oral Care")
 
 4. **tags**: Array of 6-10 SEO tags (lowercase, hyphenated)
 
@@ -97,7 +156,7 @@ Return ONLY valid JSON in this exact format:
 {{
   "cleaned_name": "...",
   "description": "...",
-  "category": "Health & Beauty > ...",
+  "category": "Main Category > Subcategory",
   "tags": ["tag1", "tag2", ...],
   "benefits": "...",
   "ingredients": "...",
@@ -110,17 +169,24 @@ Return ONLY valid JSON in this exact format:
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # Apply adaptive rate limiting before request
+                    self._adaptive_rate_limit()
+                    
                     message = self.client.messages.create(
                         model=self.model,
                         max_tokens=2000,  # Larger for batched response
                         temperature=self.temperature,
                         messages=[{"role": "user", "content": prompt}]
                     )
+                    
+                    # Success - reset rate limit counter
+                    self._handle_rate_limit_success()
                     break
                 except RateLimitError:
+                    self._handle_rate_limit_error()
                     if attempt < max_retries - 1:
                         wait_time = (2 ** attempt) * 3
-                        logger.warning(f"Rate limit hit, waiting {wait_time}s...")
+                        logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
                         time.sleep(wait_time)
                     else:
                         raise
@@ -134,7 +200,7 @@ Return ONLY valid JSON in this exact format:
             enriched = {
                 "cleaned_name": result.get("cleaned_name", product_name),
                 "description": result.get("description", f"<p>Premium <strong>{brand}</strong> product. {product_name}.</p>"),
-                "category": result.get("category", "Health & Beauty > Skin Care"),
+                "category": result.get("category", "Health & Beauty > Other"),  # Get from Claude for Type field
                 "tags": result.get("tags", [brand.lower(), "product", "beauty"]),
                 "benefits": result.get("benefits", ""),
                 "ingredients": result.get("ingredients", ""),
@@ -160,7 +226,7 @@ Return ONLY valid JSON in this exact format:
             return {
                 "cleaned_name": product_name,
                 "description": f"<p>Premium <strong>{brand}</strong> product. {product_name}.</p>",
-                "category": "Health & Beauty > Skin Care",
+                "category": "Health & Beauty > Other",  # Default fallback
                 "tags": [brand.lower(), "product", "beauty"],
                 "benefits": "",
                 "ingredients": "",
@@ -212,6 +278,9 @@ Important: Extract ONLY what exists in the product name. Do NOT invent variants.
             max_retries = 3
             for attempt in range(max_retries):
                 try:
+                    # Apply adaptive rate limiting before request
+                    self._adaptive_rate_limit()
+                    
                     message = self.client.messages.create(
                         model=self.model,
                         max_tokens=self.max_tokens['variants'],
@@ -221,8 +290,12 @@ Important: Extract ONLY what exists in the product name. Do NOT invent variants.
                             "content": prompt
                         }]
                     )
+                    
+                    # Success - reset rate limit counter
+                    self._handle_rate_limit_success()
                     break
                 except RateLimitError as e:
+                    self._handle_rate_limit_error()
                     if attempt < max_retries - 1:
                         wait_time = (2 ** attempt) * 2  # Exponential backoff: 2s, 4s, 8s
                         logger.warning(f"Rate limit hit, waiting {wait_time}s... (attempt {attempt + 1}/{max_retries})")
