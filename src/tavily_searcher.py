@@ -21,7 +21,7 @@ class TavilySearcher:
     Search for product URLs using Tavily API.
     
     Features:
-    - Domain prioritization (brand sites → retailers)
+    - Domain prioritization (brand sites to retailers)
     - Exponential backoff retry logic
     - JSON caching with auto-save
     - Rate limiting
@@ -165,7 +165,7 @@ class TavilySearcher:
                         
                         # Validate URL
                         if url and self._validate_url(url):
-                            logger.info(f"✓ Found: {url}")
+                            logger.info(f"Found: {url}")
                             
                             # Rate limiting
                             time.sleep(self.rate_limit_delay)

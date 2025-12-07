@@ -160,7 +160,7 @@ class ProcessingStats:
         print(f"  Processing time:         {self.processing_time_sec:.1f}s")
         
         if self.errors:
-            print(f"\n⚠️  ERRORS ({len(self.errors)}):")
+            print(f"\nERRORS ({len(self.errors)}):")
             for error in self.errors[:10]:
                 print(f"  - {error}")
             if len(self.errors) > 10:

@@ -146,7 +146,7 @@ class ProductEnrichmentPipeline:
                     
                     if batch_output_files:
                         all_output_files.extend(batch_output_files)
-                        logger.info(f"✓ Generated {len(batch_output_files)} file(s) for batch {batch_num}")
+                        logger.info(f"Generated {len(batch_output_files)} file(s) for batch {batch_num}")
                     else:
                         logger.warning(f"No output files generated for batch {batch_num}")
                         
@@ -162,7 +162,7 @@ class ProductEnrichmentPipeline:
                 logger.error("No output files generated")
                 return False, stats
             
-            logger.info(f"\n✓ Generated {len(all_output_files)} total output file(s)")
+            logger.info(f"\n Generated {len(all_output_files)} total output file(s)")
             for i, file_path in enumerate(all_output_files, 1):
                 logger.info(f"  {i}. {file_path}")
             
@@ -219,11 +219,11 @@ class ProductEnrichmentPipeline:
             for variant in group.variants:
                 variant.variants = self.enricher.extract_variants(variant.name)
             
-            logger.debug(f"  ✓ {group.base_name} (enriched with benefits)")
+            logger.debug(f"  {group.base_name} (enriched with benefits)")
             return True
             
         except Exception as e:
-            logger.error(f"  ✗ {group.base_name}: {str(e)}")
+            logger.error(f"   {group.base_name}: {str(e)}")
             return False
     
     def _process_batch(self, batch: List[ProductGroup], stats: ProcessingStats):
@@ -454,7 +454,7 @@ class ProductEnrichmentPipeline:
                 writer.writeheader()
                 writer.writerows(batch_rows)
             
-            logger.info(f"  ✓ {file_path.name}: {len(batch_rows)} records (rows {start_idx + 1}-{end_idx})")
+            logger.info(f"   {file_path.name}: {len(batch_rows)} records (rows {start_idx + 1}-{end_idx})")
             output_files.append(str(file_path))
         
         # Update stats
@@ -519,7 +519,7 @@ class ProductEnrichmentPipeline:
                 logger.error("No valid rows in sample")
                 return False
             
-            logger.info(f"✓ CSV validation passed ({len(rows)} rows)")
+            logger.info(f"CSV validation passed ({len(rows)} rows)")
             return True
             
         except Exception as e:

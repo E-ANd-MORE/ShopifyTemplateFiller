@@ -123,7 +123,7 @@ class ShopifyCSVGenerator:
         )
         
         csv_rows = len(rows)
-        logger.info(f"\n✓ CSV generation complete:")
+        logger.info(f"\nCSV generation complete:")
         logger.info(f"  Product groups:  {len(product_groups)}")
         logger.info(f"  CSV rows:        {csv_rows}")
         logger.info(f"  Unique handles:  {len(self.seen_handles)}")

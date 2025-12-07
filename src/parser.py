@@ -74,7 +74,7 @@ class ProductParser:
             for encoding in ['utf-8-sig', 'utf-8', 'iso-8859-1', 'cp1252']:
                 try:
                     df = pd.read_csv(filepath, encoding=encoding)
-                    logger.info(f"✓ Parsed CSV with encoding: {encoding}")
+                    logger.info(f"Parsed CSV with encoding: {encoding}")
                     break
                 except UnicodeDecodeError:
                     continue
@@ -106,7 +106,7 @@ class ProductParser:
                     logger.warning(f"Row {idx + 2}: Parse error - {str(e)}")
                     continue
             
-            logger.info(f"\n✓ Parsing complete:")
+            logger.info(f"\nParsing complete:")
             logger.info(f"  Total rows read:      {stats['total_rows_read']}")
             logger.info(f"  Valid products:       {stats['valid_products']}")
             logger.info(f"  Skipped duplicates:   {stats['skipped_duplicates']}")
@@ -251,7 +251,7 @@ class ProductParser:
             logger.debug(f"Row {idx + 2}: Validation failed for {name}")
             return None
         
-        logger.debug(f"Row {idx + 2}: ✓ Parsed {brand} - {name} ({len(images)} images)")
+        logger.debug(f"Row {idx + 2}: Parsed {brand} - {name} ({len(images)} images)")
         return product
     
     def _validate_product(self, product: ProductData) -> bool:

@@ -162,7 +162,7 @@ class FirecrawlExtractor:
                 self.cache[url] = filtered_images
                 self._save_cache()
                 
-                logger.info(f"✓ Extracted {len(filtered_images)} images")
+                logger.info(f"Extracted {len(filtered_images)} images")
                 
                 # Rate limiting
                 time.sleep(self.rate_limit_delay)

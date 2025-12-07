@@ -25,7 +25,7 @@ class ProductGrouper:
     - Row 1: "Shampoo Black 50ml" 
     - Row 2: "Shampoo Red 50ml"
     - Row 3: "Shampoo Black 100ml"
-    → These become 1 product with 3 variants
+    t These become 1 product with 3 variants
     """
     
     def __init__(self):
@@ -60,7 +60,7 @@ class ProductGrouper:
             groups = self._group_by_similarity(brand, brand_products)
             all_groups.extend(groups)
         
-        logger.info(f"\n✓ Grouping complete:")
+        logger.info(f"\n Grouping complete:")
         logger.info(f"  Total products (variants): {len(products)}")
         logger.info(f"  Product groups created:    {len(all_groups)}")
         logger.info(f"  Average variants per group: {len(products) / len(all_groups):.1f}")
@@ -111,7 +111,7 @@ class ProductGrouper:
             for product in ungrouped:
                 if self._is_similar(seed_base, product.name):
                     group.add_variant(product)
-                    logger.debug(f"  Grouped: {product.name} → {seed_base}")
+                    logger.debug(f"  Grouped: {product.name} to {seed_base}")
                 else:
                     remaining.append(product)
             
@@ -127,9 +127,9 @@ class ProductGrouper:
         Extract base product name by removing variant indicators.
         
         Examples:
-        "Shampoo Black 50ml" → "Shampoo"
-        "Lipstick Red #45" → "Lipstick"
-        "Cream 100g Vanilla" → "Cream"
+        "Shampoo Black 50ml" to "Shampoo"
+        "Lipstick Red #45" to "Lipstick"
+        "Cream 100g Vanilla" to "Cream"
         """
         # Convert to lowercase for processing
         base = name.lower().strip()

@@ -27,9 +27,9 @@ def setup_logging():
     """Configure logging"""
     try:
         logging.config.dictConfig(LOGGING_CONFIG)
-        print("✓ Logging configured")
+        print("Logging configured")
     except Exception as e:
-        print(f"⚠ Logging setup failed: {e}")
+        print(f"Logging setup failed: {e}")
         # Setup basic logging as fallback
         logging.basicConfig(
             level=logging.INFO,
@@ -131,7 +131,7 @@ def validate_environment():
         missing.append('ANTHROPIC_API_KEY')
     
     if missing:
-        print("\n❌ ERROR: Missing required API keys in .env file:")
+        print("\nERROR: Missing required API keys in .env file:")
         for key in missing:
             print(f"   - {key}")
         print("\nPlease create a .env file with your API keys.")
@@ -214,23 +214,23 @@ def main():
         success, stats = pipeline.run(str(input_file), str(output_file), max_batches=args.max_batches)
         
         if success:
-            logger.info("\n✅ Pipeline completed successfully!")
-            logger.info(f"\n📄 Output file: {output_file}")
+            logger.info("\n Pipeline completed successfully!")
+            logger.info(f"\n Output file: {output_file}")
             logger.info("\nYou can now import this CSV into Shopify:")
-            logger.info("  1. Go to Shopify Admin → Products")
+            logger.info("  1. Go to Shopify Admin to Products")
             logger.info("  2. Click 'Import' button")
             logger.info(f"  3. Upload: {output_file.name}")
             sys.exit(0)
         else:
-            logger.error("\n❌ Pipeline failed. Check logs for details.")
+            logger.error("\nPipeline failed. Check logs for details.")
             sys.exit(1)
             
     except KeyboardInterrupt:
-        logger.warning("\n\n⚠️  Pipeline interrupted by user")
+        logger.warning("\n\nPipeline interrupted by user")
         sys.exit(130)
         
     except Exception as e:
-        logger.error(f"\n❌ Unexpected error: {str(e)}", exc_info=True)
+        logger.error(f"\nUnexpected error: {str(e)}", exc_info=True)
         sys.exit(1)
 
 
